@@ -10,3 +10,26 @@ models/gigaam/*.onnx
 models/gigaam-e2e/*.onnx
 models/parakeet/*.gguf
 .DS_Store
+
+# Личные записи и результаты никогда не входят в публичный репозиторий.
+*.m4a
+*.wav
+*.mp3
+*.aac
+*.ogg
+*.opus
+*.flac
+*.aiff
+*.caf
+*.wma
+*.amr
+*.mp4
+*.mov
+*.webm
+*.npz
+*.onnx
+*.gguf
+transcript*.json
+transcript*.txt
+transcript*.md
+transcript*.srt

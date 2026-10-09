@@ -37,9 +37,11 @@ def merge_turns(rows, keep_embeddings=False):
 
 def render(document, names=None, include_speakers=True):
     names = names or document.get("names", {})
-    lines = [f"Транскрипция: {document['source']}",
+    title = (document.get('title') or '').strip() or Path(document['source']).stem
+    lines = [f"Транскрипция: {title}", f"Исходный файл: {document['source']}",
              f"Модель: {document['model']} · Длительность: {timestamp(document['duration'])}",
-             "Автоматическая расшифровка. [?] — голос определён неуверенно; [перекрытие] — одновременная речь.", ""]
+             ""]
+    if include_speakers: lines.insert(-1, "Автоматическая расшифровка. [?] — проверьте спикера; [перекрытие] — одновременная речь.")
     subtitles = []
     for index, row in enumerate(document["segments"], 1):
         speaker = row.get("speaker") if include_speakers else None
@@ -53,6 +55,12 @@ def render(document, names=None, include_speakers=True):
     return "\n".join(lines), "\n".join(subtitles)
 
 
+def service_folder(folder: Path):
+    service = folder / "Служебные данные"
+    service.mkdir(parents=True, exist_ok=True)
+    return service
+
+
 def write_exports(document, folder: Path, names=None):
     folder.mkdir(parents=True, exist_ok=True)
     if names is not None:
@@ -64,8 +72,8 @@ def write_exports(document, folder: Path, names=None):
     outputs.update({'transcript.no-speakers.txt': plain, 'transcript.no-speakers.md': '# '+plain,
                     'transcript.no-speakers.srt': plain_srt})
     for name, content in outputs.items():
-        path = folder / name
+        path = (service_folder(folder) if name == "transcript.json" else folder) / name
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(content, encoding="utf-8")
         temporary.replace(path)
-    return folder / "transcript.json"
+    return service_folder(folder) / "transcript.json"

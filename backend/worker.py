@@ -19,7 +19,7 @@ import soundfile as sf
 import sherpa_onnx as sh
 
 from backend.asr import GigaAM, Parakeet
-from backend.export import merge_turns, write_exports
+from backend.export import merge_turns, write_exports, service_folder
 from backend.speakers import assign_speakers, normalize, uncovered
 from backend.alignment import union_intervals, assign_words
 
@@ -305,7 +305,7 @@ def run(request, resources):
         if diarize:
             dim = extractor.dim
             vectors = np.asarray([z.pop('embedding', None) or [0.0]*dim for z in segments], dtype=np.float32)
-            np.savez_compressed(folder/'voiceprints.npz', vectors=vectors, starts=[z['start'] for z in segments], ends=[z['end'] for z in segments])
+            np.savez_compressed(service_folder(folder)/'voiceprints.npz', vectors=vectors, starts=[z['start'] for z in segments], ends=[z['end'] for z in segments])
         for z in segments: z.pop('_weight', None)
         output = write_exports(document, folder)
         emit("complete", progress=100, result=str(output), folder=str(folder), speaker_count=speaker_count,
@@ -409,7 +409,7 @@ def run_aligned(request, resources):
         folder=destination/f"{source.stem[:80]} — {datetime.now().strftime('%Y-%m-%d %H-%M')} — {uuid.uuid4().hex[:6]}"
         folder.mkdir(parents=True,exist_ok=True)
         vectors=np.asarray([z.pop('embedding',None) or [0.0]*extractor.dim for z in rows],dtype=np.float32)
-        np.savez_compressed(folder/'voiceprints.npz',vectors=vectors,starts=[z['start'] for z in rows],ends=[z['end'] for z in rows])
+        np.savez_compressed(service_folder(folder)/'voiceprints.npz',vectors=vectors,starts=[z['start'] for z in rows],ends=[z['end'] for z in rows])
         document=dict(version=2,source=source.name,model=recognizer.model_name if model=='gigaam' else 'Parakeet v3 Q8_0',
             duration=duration,diarized=True,speaker_count=actual,requested_speakers=count,names={},segments=rows,
             expected_language=language,speaker_diagnostics=diagnostics,processing_seconds=round(time.monotonic()-begin,1),

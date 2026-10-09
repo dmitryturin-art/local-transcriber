@@ -29,6 +29,8 @@ struct Transcript: Codable, Equatable {
     var segments: [Segment]
     var processingSeconds: Double
     var expectedLanguage: String?
+    var title: String?
+    var displayTitle: String { let value = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""; return value.isEmpty ? (source as NSString).deletingPathExtension : value }
 }
 
 struct TermRule: Codable, Identifiable, Equatable {
@@ -130,6 +132,10 @@ final class AppModel: ObservableObject {
     @Published var mergeInto = 2
     @Published var reclusterCount = 2
     @Published var expectedLanguage = UserDefaults.standard.string(forKey: "expectedLanguage") ?? "ru"
+    @Published var showSettings = false
+    @Published var showExport = false
+    @Published var exportFormat = "txt"
+    @Published var exportSpeakers = true
     @Published var showLibrary = false
     @Published var showHelp = false
     @Published var previewStatus = ""
@@ -399,26 +405,30 @@ final class AppModel: ObservableObject {
         do {
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let data = try Data(contentsOf: url)
+            let actualURL = FileManager.default.fileExists(atPath: url.path) ? url : ServiceFiles.documentURL(in: ServiceFiles.resultFolder(for: url))
+            let data = try Data(contentsOf: actualURL)
             var result = try decoder.decode(Transcript.self, from: data)
             for index in result.segments.indices {
                 if result.segments[index].segmentID == nil { result.segments[index].segmentID = UUID().uuidString }
             }
             rawDocument = (try JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-            let originalURL = url.deletingLastPathComponent().appendingPathComponent("transcript.original.json")
+            let folder = ServiceFiles.resultFolder(for: url)
+            let originalURL = ServiceFiles.file("transcript.original.json", in: folder)
             originalDocument = (try? Data(contentsOf: originalURL)).flatMap { try? decoder.decode(Transcript.self, from: $0) } ?? result
             transcript = result
             names = result.names
-            resultFolder = url.deletingLastPathComponent()
+            resultFolder = folder
             namesSaved = false
             resetEditor()
             if input?.lastPathComponent != result.source { input = nil }
-            if input == nil, let saved = UserDefaults.standard.dictionary(forKey: "transcriptAudioPaths")?[url.path] as? String,
-               FileManager.default.fileExists(atPath: saved) { input = URL(fileURLWithPath: saved) }
-            if let input = input {
-                var paths = UserDefaults.standard.dictionary(forKey: "transcriptAudioPaths") ?? [:]
-                paths[url.path] = input.path; UserDefaults.standard.set(paths, forKey: "transcriptAudioPaths")
+            let keys = [url.path, actualURL.path, folder.appendingPathComponent("transcript.json").path,
+                        ServiceFiles.directory(in: folder).appendingPathComponent("transcript.json").path]
+            var paths = UserDefaults.standard.dictionary(forKey: "transcriptAudioPaths") ?? [:]
+            if input == nil, let saved = keys.compactMap({ paths[$0] as? String }).first(where: { FileManager.default.fileExists(atPath: $0) }) {
+                input = URL(fileURLWithPath: saved)
             }
+            if let input = input { for key in keys { paths[key] = input.path }; UserDefaults.standard.set(paths, forKey: "transcriptAudioPaths") }
+
         } catch { self.error = "Не удалось открыть результат: \(error.localizedDescription)" }
     }
 
@@ -439,10 +449,12 @@ final class AppModel: ObservableObject {
         return name.isEmpty ? "Спикер \(speaker)" : name
     }
 
-    func textExports(includeSpeakers: Bool = true) -> (String, String) {
+    func textExports(includeSpeakers: Bool = true, includeHeader: Bool = true) -> (String, String) {
         guard let transcript = transcript else { return ("", "") }
-        var lines = ["Транскрипция: \(transcript.source)", "Модель: \(transcript.model) · Длительность: \(timecode(transcript.duration))",
-                     "Автоматическая расшифровка. [?] — голос определён неуверенно; [перекрытие] — одновременная речь.", ""]
+        var lines = ["Транскрипция: \(transcript.displayTitle)", "Исходный файл: \(transcript.source)",
+                     "Модель: \(transcript.model) · Длительность: \(timecode(transcript.duration))", ""]
+        if includeSpeakers { lines.insert("Автоматическая расшифровка. [?] — проверьте спикера; [перекрытие] — одновременная речь.", at: lines.count-1) }
+        if !includeHeader { lines = [] }
         var subtitles: [String] = []
         for (index, row) in transcript.segments.enumerated() {
             let markers = (row.uncertain == true ? " [?]" : "") + (row.overlap == true ? " [перекрытие]" : "")
@@ -469,10 +481,12 @@ final class AppModel: ObservableObject {
             encoder.keyEncodingStrategy = .convertToSnakeCase
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             // Сохраняем исходные файлы один раз, до первого редактирования.
-            if !FileManager.default.fileExists(atPath: folder.appendingPathComponent("transcript.original.json").path) {
+            try ServiceFiles.organize(in: folder)
+            let service = ServiceFiles.directory(in: folder)
+            if !FileManager.default.fileExists(atPath: service.appendingPathComponent("transcript.original.json").path) {
               for suffix in ["json", "txt", "md", "srt", "no-speakers.txt", "no-speakers.md", "no-speakers.srt"] {
-                let source = folder.appendingPathComponent("transcript.\(suffix)")
-                let backup = folder.appendingPathComponent("transcript.original.\(suffix)")
+                let source = suffix == "json" ? ServiceFiles.documentURL(in: folder) : folder.appendingPathComponent("transcript.\(suffix)")
+                let backup = service.appendingPathComponent("transcript.original.\(suffix)")
                 if FileManager.default.fileExists(atPath: source.path) && !FileManager.default.fileExists(atPath: backup.path) {
                     try FileManager.default.copyItem(at: source, to: backup)
                 }
@@ -496,7 +510,7 @@ final class AppModel: ObservableObject {
             try text.write(to: folder.appendingPathComponent("transcript.txt"), atomically: true, encoding: .utf8)
             try ("# " + text).write(to: folder.appendingPathComponent("transcript.md"), atomically: true, encoding: .utf8)
             try subtitles.write(to: folder.appendingPathComponent("transcript.srt"), atomically: true, encoding: .utf8)
-            try json.write(to: folder.appendingPathComponent("transcript.json"), options: .atomic)
+            try json.write(to: service.appendingPathComponent("transcript.json"), options: .atomic)
             let (plain, plainSRT) = textExports(includeSpeakers: false)
             try plain.write(to: folder.appendingPathComponent("transcript.no-speakers.txt"), atomically: true, encoding: .utf8)
             try ("# "+plain).write(to: folder.appendingPathComponent("transcript.no-speakers.md"), atomically: true, encoding: .utf8)
@@ -520,7 +534,7 @@ final class AppModel: ObservableObject {
         guard hasUnsavedChanges else { return true }
         let alert = NSAlert()
         alert.messageText = "Сохранить правки транскрипции?"
-        alert.informativeText = "Есть изменения текста или спикеров, которые ещё не сохранены."
+        alert.informativeText = "Есть изменения названия, текста или спикеров, которые ещё не сохранены."
         alert.addButton(withTitle: "Сохранить")
         alert.addButton(withTitle: "Не сохранять")
         alert.addButton(withTitle: "Отмена")
@@ -595,6 +609,37 @@ final class AppModel: ObservableObject {
         document.segments[index].speaker = value
         document.segments[index].uncertain = false
         transcript = document
+    }
+
+    func renameTranscript(_ title: String) {
+        guard !running, var document = transcript, document.title != title else { return }
+        recordEdit("title"); document.title = title; transcript = document
+    }
+
+    func renameLibraryEntry(_ entry: LibraryEntry, title: String) {
+        let model: AppModel
+        if resultFolder?.resolvingSymlinksInPath() == ServiceFiles.resultFolder(for: entry.url).resolvingSymlinksInPath() { model = self }
+        else { model = AppModel(); model.loadResult(entry.url) }
+        guard model.error == nil else { error = model.error; return }
+        model.renameTranscript(title); model.saveEdits()
+        if let problem = model.error { error = problem }
+    }
+
+    func exportText(format: String, speakers: Bool) -> String {
+        let rendered = textExports(includeSpeakers: speakers)
+        return format == "srt" ? rendered.1 : (format == "md" ? "# " : "") + rendered.0
+    }
+
+    func exportResult() {
+        guard let document = transcript else { return }
+        let panel = NSSavePanel()
+        panel.title = "Экспорт транскрипции"
+        panel.allowedContentTypes = [exportFormat == "srt" ? UTType(filenameExtension: "srt") ?? .plainText : exportFormat == "md" ? UTType(filenameExtension: "md") ?? .plainText : .plainText]
+        let safeName = document.displayTitle.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        panel.nameFieldStringValue = safeName + (exportSpeakers ? " — по спикерам." : " — без спикеров.") + exportFormat
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try exportText(format: exportFormat, speakers: exportSpeakers).write(to: url, atomically: true, encoding: .utf8); showExport = false; editMessage = "Экспорт сохранён" }
+        catch { self.error = "Не удалось экспортировать: \(error.localizedDescription)" }
     }
 
     func renameSpeaker(_ speaker: Int, _ name: String) {
@@ -712,7 +757,7 @@ final class AppModel: ObservableObject {
 
     func recalculateSpeakers() {
         guard !running, let document = transcript, let folder = resultFolder else { return }
-        let cache = folder.appendingPathComponent("voiceprints.npz")
+        let cache = ServiceFiles.file("voiceprints.npz", in: folder)
         guard input != nil || FileManager.default.fileExists(atPath: cache.path) else { error = "Для старой транскрипции укажите исходную запись"; return }
         do {
             let base = FileManager.default.temporaryDirectory.appendingPathComponent("voices-\(UUID().uuidString)")
@@ -729,7 +774,7 @@ final class AppModel: ObservableObject {
 
     func copyText() {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(textExports().0, forType: .string)
+        NSPasteboard.general.setString(textExports(includeSpeakers: showSpeakerLabels, includeHeader: false).0, forType: .string)
     }
 
     func showFolder() {
@@ -813,8 +858,11 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(state.transcript == nil ? "Расшифровка записи" : "Транскрипция готова")
-                            .font(.system(size: 24, weight: .semibold))
+                        if let document = state.transcript {
+                            TextField("Название транскрипции", text: Binding(get: { state.transcript?.title ?? document.displayTitle }, set: { state.renameTranscript($0) }))
+                                .textFieldStyle(.plain).font(.system(size: 24, weight: .semibold)).disabled(state.running)
+                            Text("Исходный файл: " + document.source).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        } else { Text("Расшифровка записи").font(.system(size: 24, weight: .semibold)) }
                         Text(state.transcript.map { "\($0.model) · \(timecode($0.duration)) · \($0.segments.count) реплик" }
                             ?? "Текст, временные метки и голоса в одном месте")
                             .font(.subheadline).foregroundStyle(.secondary)
@@ -822,8 +870,7 @@ struct ContentView: View {
                     Spacer()
                     Button("Мои транскрипции") { state.showLibrary = true }.disabled(state.running)
                     Button { state.showHelp = true } label: { Image(systemName: "questionmark.circle") }.help("Как пользоваться")
-                    Button { state.openResult() } label: { Image(systemName: "folder") }
-                        .help("Открыть сохранённую транскрипцию").disabled(state.running)
+
                 }.padding(28)
                 Divider()
                 if let transcript = state.transcript { result(transcript) }
@@ -834,6 +881,8 @@ struct ContentView: View {
         .frame(minWidth: 920, minHeight: 700)
         .tint(accent)
         .onAppear { if !state.modelReady { state.showModels = true } }
+        .sheet(isPresented: $state.showSettings) { SettingsPanel(state: state) }
+        .sheet(isPresented: $state.showExport) { ExportPanel(state: state) }
         .sheet(isPresented: $state.showLibrary) { TranscriptLibraryPanel(state: state) }
         .sheet(isPresented: $state.showHelp) { HelpPanel() }
         .sheet(isPresented: $state.showReplacement) { ReplacementPanel(state: state) }
@@ -879,11 +928,11 @@ struct ContentView: View {
             }
             VStack(alignment: .leading, spacing: 9) {
                 sectionLabel("МОДЕЛЬ РАСПОЗНАВАНИЯ")
-                Picker("Модель", selection: $state.model) {
+                HStack { Spacer(); Picker("Модель", selection: $state.model) {
                     Text("GigaAM v3").tag("gigaam")
                     Text("Parakeet v3").tag("parakeet")
-                }.pickerStyle(.segmented).labelsHidden().disabled(state.running)
-                Button("Управление моделями") { state.showModels = true }.disabled(state.running)
+                }.pickerStyle(.segmented).labelsHidden().frame(width: 255).disabled(state.running); Spacer() }
+                HStack { Spacer(); Button("Управление моделями") { state.showModels = true }.disabled(state.running); Spacer() }
                 Picker("Ожидаемый язык", selection: $state.expectedLanguage) {
                     Text("Русский").tag("ru"); Text("Английский").tag("en"); Text("Русский + английский").tag("auto")
                 }.disabled(state.running)
@@ -905,14 +954,6 @@ struct ContentView: View {
                     Text("Если знаете число участников, укажите его. Имена можно задать после обработки.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            VStack(alignment: .leading, spacing: 9) {
-                sectionLabel("СОХРАНЕНИЕ")
-                Button { state.selectOutput() } label: {
-                    HStack { Image(systemName: "folder"); Text(state.output.lastPathComponent).lineLimit(1); Spacer(); Image(systemName: "chevron.right").font(.caption) }
-                }.disabled(state.running)
-                Text("TXT · Markdown · SRT\nПлюс JSON для повторного открытия")
-                    .font(.caption).foregroundStyle(.secondary)
             }
             }.padding(24) }
             Divider()
@@ -972,7 +1013,7 @@ struct ContentView: View {
     private func result(_ transcript: Transcript) -> some View {
         VStack(spacing: 0) {
             if state.running { HStack { ProgressView(value:state.progress,total:100); Text(state.status).font(.caption) }.padding(14) }
-            if transcript.diarized && transcript.speakerCount > 0 {
+            if state.showSpeakerLabels && transcript.diarized && transcript.speakerCount > 0 {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         Text("Имена спикеров").font(.headline)
@@ -1029,7 +1070,7 @@ struct ContentView: View {
                 if state.playing { Button { state.stopPlayback() } label: { Image(systemName: "stop.fill") }.help("Остановить прослушивание") }
                 Button("Копировать текст") { state.copyText() }
                 Button("Сохранить правки") { state.saveEdits() }.disabled(!state.hasUnsavedChanges)
-                Button("Открыть папку") { state.showFolder() }.buttonStyle(.borderedProminent)
+                Button("Экспорт…") { state.exportSpeakers = state.showSpeakerLabels; state.showExport = true }.buttonStyle(.borderedProminent)
             }.padding(18)
         }
     }
@@ -1046,10 +1087,14 @@ struct ContentView: View {
                 Button("Спикеры") { state.showSpeakerTools = true }
             }
             HStack {
-                TextField("Поиск по тексту", text: $state.searchText).textFieldStyle(.roundedBorder)
+                HStack(spacing: 4) {
+                    TextField("Поиск по тексту", text: $state.searchText).textFieldStyle(.plain)
+                    if !state.searchText.isEmpty { Button { state.searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).help("Сбросить поиск") }
+                }.padding(6).background(Color(nsColor: .textBackgroundColor)).cornerRadius(6).overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.gray.opacity(0.25)))
                 Toggle("Требуют проверки", isOn: $state.onlyIssues).toggleStyle(.checkbox)
-                Toggle("Спикеры", isOn: $state.showSpeakerLabels).toggleStyle(.checkbox)
+                Picker("Вид текста", selection: $state.showSpeakerLabels) { Text("По спикерам").tag(true); Text("Сплошной текст").tag(false) }.pickerStyle(.segmented).labelsHidden().frame(width: 260)
             }
+            if !state.searchText.isEmpty { Text("Поиск активен · найдено реплик: \(state.visibleIndices.count). Очистите поиск крестиком, чтобы видеть всю запись.").font(.caption).foregroundStyle(.secondary) }
             if state.editing {
                 HStack {
                     Text("Правьте текст и спикера. Временные метки сохраняются.").font(.caption).foregroundStyle(.secondary)
@@ -1092,15 +1137,16 @@ struct SegmentEditorRow: View {
                     } else if state.showSpeakerLabels && document.diarized {
                         Text("Спикер не определён").font(.caption).foregroundStyle(.secondary)
                     }
-                    if !state.previewStatus.isEmpty { Text(state.previewStatus).font(.caption2) }
+                    if state.showSpeakerLabels {
                     if row.overlap == true { Text("Одновременная речь").font(.caption2).foregroundStyle(.orange) }
-                    else if row.uncertain == true { Text("Голос неуверенно").font(.caption2).foregroundStyle(.secondary) }
+                    else if row.uncertain == true { Text("Проверьте спикера").font(.caption2).foregroundStyle(.secondary) }
                     if row.languageWarning == true { Text("Проверить язык").font(.caption2).foregroundStyle(.orange) }
                     Spacer()
                     Button { state.markReviewed(index) } label: {
                         Image(systemName: row.reviewed == true ? "checkmark.seal.fill" : "checkmark.seal")
                             .foregroundStyle(row.reviewed == true ? Color.green : Color.secondary)
                     }.buttonStyle(.plain).help(row.reviewed == true ? "Снять отметку проверки" : "Отметить проверенной")
+                    }
                 }
                 if state.editing {
                     TextEditor(text: Binding(get: { state.segmentText(index, id: row.id) },
@@ -1110,7 +1156,7 @@ struct SegmentEditorRow: View {
                         .padding(6).background(Color(nsColor: .textBackgroundColor))
                         .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.gray.opacity(0.2)))
                 } else {
-                    Text(row.text).font(.system(size: 14)).lineSpacing(4).textSelection(.enabled)
+                    Text(SearchHighlight.text(row.text, query: state.searchText)).font(.system(size: 14)).lineSpacing(4).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -1202,6 +1248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async { RussianMenus.localize(NSApp.mainMenu) }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let state = state else { return .terminateNow }
@@ -1227,9 +1274,10 @@ struct LocalTranscriberApp: App {
     @StateObject private var state = AppModel()
     var body: some Scene {
         WindowGroup("Голоса") {
-            ContentView().environmentObject(state).onAppear { delegate.state = state }
+            ContentView().environmentObject(state).onAppear { delegate.state = state; DispatchQueue.main.async { RussianMenus.localize(NSApp.mainMenu) } }
         }.defaultSize(width: 1020, height: 780)
             .commands {
+                CommandGroup(replacing: .appSettings) { Button("Настройки…") { state.showSettings = true }.keyboardShortcut(",").disabled(state.running) }
                 CommandGroup(replacing: .newItem) {
                     Button("Выбрать запись…") { state.selectFile() }.keyboardShortcut("o").disabled(state.running)
                     Button("Открыть транскрипцию…") { state.openResult() }.keyboardShortcut("o", modifiers: [.command, .shift]).disabled(state.running)
@@ -1239,6 +1287,7 @@ struct LocalTranscriberApp: App {
                     Button("Повторить правку") { state.redoCommand() }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(!state.canRedoCommand || state.running)
                 }
                 CommandGroup(replacing: .saveItem) {
+                    Button("Экспорт…") { state.exportSpeakers = state.showSpeakerLabels; state.showExport = true }.disabled(state.transcript == nil || state.running)
                     Button("Сохранить правки") { state.saveEdits() }.keyboardShortcut("s").disabled(!state.hasUnsavedChanges || state.running)
                 }
                 CommandGroup(replacing: .help) { Button("Как пользоваться «Голоса»") { state.showHelp = true } }

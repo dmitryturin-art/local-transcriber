@@ -2,7 +2,10 @@ import Foundation
 
 @main
 struct EditorTests {
-    static func main() throws {
+    static func main() {
+        do { try run() } catch { fputs("Ошибка проверки: \(error)\n", stderr); exit(1) }
+    }
+    static func run() throws {
         let domain = "local.voices.editor-tests"
         UserDefaults.standard.removePersistentDomain(forName: domain)
         defer { UserDefaults.standard.removePersistentDomain(forName: domain) }
@@ -60,17 +63,17 @@ struct EditorTests {
         state.saveEdits()
         check(state.error == nil && !state.hasUnsavedChanges, "Сохранение правок")
         for ext in ["txt", "md", "srt", "json"] {
-            let text = try String(contentsOf: folder.appendingPathComponent("transcript.\(ext)"), encoding: .utf8)
+            let text = try String(contentsOf: ext == "json" ? ServiceFiles.documentURL(in: folder) : folder.appendingPathComponent("transcript.\(ext)"), encoding: .utf8)
             check(text.contains("GigaAM") && text.contains("Новый участник") && text.contains("iPhone"), "Согласованный экспорт \(ext)")
         }
-        let stored = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        let stored = try JSONSerialization.jsonObject(with: Data(contentsOf: ServiceFiles.documentURL(in: folder))) as! [String: Any]
         check((stored["custom_meta"] as! [String: Any])["keep"] as! Int == 7, "Неизвестные поля JSON сохраняются")
         check((stored["segments"] as! [[String: Any]])[0]["similarity"] as! Double == 0.54, "Метаданные спикера сохраняются")
-        let backupURL = folder.appendingPathComponent("transcript.original.json")
+        let backupURL = ServiceFiles.file("transcript.original.json", in: folder)
         let backup = try Data(contentsOf: backupURL)
         check(String(data: backup, encoding: .utf8) == json, "Исходная версия хранится без изменений")
         state.editSpeaker(0, 0); state.saveEdits()
-        let noSpeaker = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        let noSpeaker = try JSONSerialization.jsonObject(with: Data(contentsOf: ServiceFiles.documentURL(in: folder))) as! [String: Any]
         check((noSpeaker["segments"] as! [[String: Any]])[0]["speaker"] == nil, "Удаление спикера не восстанавливает старое поле")
         check(try Data(contentsOf: backupURL) == backup, "Повторное сохранение не перезаписывает исходник")
         state.loadResult(url)
@@ -113,7 +116,28 @@ struct EditorTests {
         state.seekPlayback(15)
         check(state.activeSegmentID == nil, "Пауза между репликами не подсвечивает чужой текст")
         let library = TranscriptLibrary.entries(in: folder.deletingLastPathComponent())
-        check(library.contains { $0.url.resolvingSymlinksInPath().path == url.resolvingSymlinksInPath().path }, "Библиотека находит сохранённый результат")
+        check(library.contains { $0.url.resolvingSymlinksInPath().path == ServiceFiles.documentURL(in: folder).resolvingSymlinksInPath().path }, "Библиотека находит сохранённый результат")
+        state.renameTranscript("Диалог для проверки")
+        state.saveEdits()
+        check(state.error == nil && state.transcript?.title == "Диалог для проверки", "Название сохраняется")
+        state.loadResult(url)
+        check(state.transcript?.title == "Диалог для проверки", "Открытие старого пути после переноса JSON")
+        check(TranscriptLibrary.entries(in: folder.deletingLastPathComponent()).contains { $0.title == "Диалог для проверки" && $0.source == "demo.m4a" }, "В библиотеке название и исходное имя различаются")
+        let plainExport = state.exportText(format: "txt", speakers: false)
+        check(plainExport.contains("[00:00:00]") && !plainExport.contains("[?]") && !plainExport.contains("перекрытие"), "В тексте без спикеров только время и текст")
+        check(state.exportText(format: "srt", speakers: false).contains(" --> "), "Экспорт SRT сохраняет интервалы")
+        check(SearchHighlight.ranges("Богатство и богатства 👋", query: "богат").count == 2, "Поиск выделяет все совпадения без учёта регистра")
+        check(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("transcript.original.json").path), "Резервные копии убраны из основной папки")
+        check(FileManager.default.fileExists(atPath: ServiceFiles.documentURL(in: folder).path), "Рабочий JSON сохранён в служебной папке")
+        let plainCopy = state.textExports(includeSpeakers: false, includeHeader: false).0
+        check(plainCopy.hasPrefix("[00:00:00]") && !plainCopy.contains("Исходный файл:"), "Копирование содержит только видимый текст с временем")
+        let entry = TranscriptLibrary.entries(in: folder.deletingLastPathComponent()).first { $0.title == "Диалог для проверки" }!
+        let libraryModel = AppModel()
+        libraryModel.renameLibraryEntry(entry, title: "Новое название в списке")
+        check(libraryModel.error == nil && TranscriptLibrary.entries(in: folder.deletingLastPathComponent()).contains { $0.title == "Новое название в списке" }, "Переименование закрытой транскрипции из списка")
+        state.loadResult(url)
+        check(state.transcript?.source == "demo.m4a" && state.transcript?.title == "Новое название в списке", "Переименование не меняет источник")
+        check(SearchHighlight.text("богатство", query: "богат").runs.count == 2, "Найденная часть слова получает отдельную подсветку")
         print("Редактор: \(checks) проверок — OK")
     }
 }

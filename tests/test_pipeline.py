@@ -56,9 +56,27 @@ class ExportTests(unittest.TestCase):
                 self.assertIn("Дмитрий", text)
                 self.assertIn("Юрий", text)
                 self.assertIn("[перекрытие]", text)
-            saved = json.loads((folder / "transcript.json").read_text())
+            saved = json.loads((folder / "Служебные данные" / "transcript.json").read_text())
             self.assertEqual(saved["names"]["2"], "Юрий")
             self.assertIn("00:00:00,000 --> 00:00:03,000", (folder / "transcript.srt").read_text())
+
+    def test_plain_export_and_title(self):
+        doc = dict(source="technical.m4a", title="Мой диалог", model="test", duration=12,
+                   diarized=True, names={"1": "Дмитрий"},
+                   segments=[dict(start=1, end=4, text="Текст", speaker=1, uncertain=True, overlap=True)])
+        from backend.export import render
+        text, subtitles = render(doc, include_speakers=False)
+        self.assertIn("Мой диалог", text)
+        self.assertIn("[00:00:01] Текст", text)
+        self.assertNotIn("Дмитрий", text)
+        self.assertNotIn("[?]", text)
+        self.assertNotIn("перекрытие", text)
+        self.assertNotIn("Дмитрий", subtitles)
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            document = write_exports(doc, folder)
+            self.assertEqual(document.parent.name, "Служебные данные")
+            self.assertTrue((folder / "transcript.txt").is_file())
 
     def test_merge_preserves_overlap_and_speaker_switch(self):
         rows = [dict(start=0, end=2, text="один", speaker=1),

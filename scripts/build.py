@@ -117,7 +117,7 @@ def main():
     run(["swiftc", "-swift-version", "5", "-O", "-parse-as-library", "-target", "arm64-apple-macos14.0",
          "-module-cache-path", build / "swift-cache", *[str(p) for p in sorted((ROOT/"macos").glob("*.swift"))], "-o", executable])
     info = {"CFBundleName": "Голоса", "CFBundleDisplayName": "Голоса", "CFBundleExecutable": "LocalTranscriber",
-            "CFBundleIdentifier": "local.voices.transcriber", "CFBundleDevelopmentRegion": "ru", "CFBundleLocalizations": ["ru"], "CFBundleVersion": "5", "CFBundleShortVersionString": "1.4.0",
+            "CFBundleIdentifier": "local.voices.transcriber", "LSApplicationCategoryType": "public.app-category.productivity", "CFBundleDevelopmentRegion": "ru", "CFBundleLocalizations": ["ru"], "CFBundleVersion": "5", "CFBundleShortVersionString": "1.4.0",
             "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "14.0", "NSHighResolutionCapable": True,
             "CFBundleIconFile": "AppIcon", "NSHumanReadableCopyright": "Локальный транскрибатор · 2026"}
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))

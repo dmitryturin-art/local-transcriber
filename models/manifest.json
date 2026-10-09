@@ -1,0 +1,58 @@
+{
+  "models": [
+    {
+      "file": "gigaam-e2e/features.json",
+      "bytes": 148,
+      "sha256": "6a5a5df279e400fc9e66c7bbb3225d3e0b7543da15e28f2202f85caa9e87ef24",
+      "origin": "https://huggingface.co/ai-sage/GigaAM-v3"
+    },
+    {
+      "file": "gigaam-e2e/tokenizer.model",
+      "bytes": 255336,
+      "sha256": "828c12c991019eef952a960661f25a92d6ad279591e2ea466b4aeddf1d20a18a",
+      "origin": "https://huggingface.co/ai-sage/GigaAM-v3"
+    },
+    {
+      "file": "gigaam-e2e/v3_rnnt_decoder.onnx",
+      "bytes": 4599930,
+      "sha256": "e9de6c1c7d81681d2337c5083c398349747b8a478318a63a9c9bae754f86d6ec",
+      "origin": "https://huggingface.co/ai-sage/GigaAM-v3"
+    },
+    {
+      "file": "gigaam-e2e/v3_rnnt_encoder.onnx",
+      "bytes": 885084495,
+      "sha256": "ab5d548acce4c7108bb74bfc36a261989293b1c3d6db98c81f31bebb1708f99f",
+      "origin": "https://huggingface.co/ai-sage/GigaAM-v3"
+    },
+    {
+      "file": "gigaam-e2e/v3_rnnt_joint.onnx",
+      "bytes": 2712896,
+      "sha256": "602ff7017a93311aad34df1437c8d7f49911353c13d6eae7a6ee7b041339465c",
+      "origin": "https://huggingface.co/ai-sage/GigaAM-v3"
+    },
+    {
+      "file": "parakeet/parakeet-tdt-0.6b-v3-Q8_0.gguf",
+      "bytes": 739508576,
+      "sha256": "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7",
+      "origin": "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf"
+    },
+    {
+      "file": "segmentation.onnx",
+      "bytes": 5992913,
+      "sha256": "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079",
+      "origin": "https://huggingface.co/pyannote/segmentation-3.0"
+    },
+    {
+      "file": "silero_vad.onnx",
+      "bytes": 643854,
+      "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+      "origin": "https://github.com/snakers4/silero-vad"
+    },
+    {
+      "file": "speaker.onnx",
+      "bytes": 28281164,
+      "sha256": "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
+      "origin": "https://github.com/modelscope/3D-Speaker"
+    }
+  ]
+}

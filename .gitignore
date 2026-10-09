@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+dev-resources/
+vendor/
+models/*.onnx
+models/gigaam/*.onnx
+models/gigaam-e2e/*.onnx
+models/parakeet/*.gguf
+.DS_Store

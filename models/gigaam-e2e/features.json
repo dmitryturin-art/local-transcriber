@@ -1,0 +1,9 @@
+{
+  "n_fft": 320,
+  "win_length": 320,
+  "hop_length": 160,
+  "center": false,
+  "features": 64,
+  "blank_id": 1024,
+  "model_name": "v3_e2e_rnnt"
+}

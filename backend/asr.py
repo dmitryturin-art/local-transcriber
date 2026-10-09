@@ -60,6 +60,8 @@ class GigaAM:
                 [np.array([[label]], dtype=np.int64), h, c])))
         d, h, c = decode(self.blank, h, c)
         tokens = []
+        token_times = []
+        duration = len(audio)/16000
         for t in range(int(length[0])):
             if t % 16 == 0:
                 self.check_cancel()
@@ -70,14 +72,33 @@ class GigaAM:
                 if token == self.blank:
                     break
                 tokens.append(token)
+                token_times.append(min(duration, t * .04))
                 d, h, c = decode(token, h, c)
         if self.tokenizer is not None:
-            return self.tokenizer.decode(tokens).strip()
-        return "".join(self.vocab[token] for token in tokens).replace("▁", " ").strip()
+            text = self.tokenizer.decode(tokens).strip()
+            pieces = [self.tokenizer.id_to_piece(token) for token in tokens]
+            decoder = self.tokenizer.decode
+        else:
+            text = "".join(self.vocab[token] for token in tokens).replace("▁", " ").strip()
+            pieces = [self.vocab[token] for token in tokens]
+            decoder = lambda ids: ''.join(self.vocab[i] for i in ids).replace('▁',' ').strip()
+        self.last_words = []
+        ids=[]; first=last=0.0
+        for token,piece,when in zip(tokens,pieces,token_times):
+            if piece.startswith('▁') and ids:
+                word=decoder(ids).strip()
+                if word: self.last_words.append(dict(text=word,start=max(0,first-.08),end=min(duration,max(first+.04,last+.10))))
+                ids=[]
+            if not ids: first=when
+            ids.append(token);last=when
+        if ids:
+            word=decoder(ids).strip()
+            if word:self.last_words.append(dict(text=word,start=max(0,first-.08),end=min(duration,max(first+.04,last+.10))))
+        return text
 
 
 class Parakeet:
-    def __init__(self, models: Path, native: Path, check_cancel):
+    def __init__(self, models: Path, native: Path, check_cancel, language=None):
         import os
         # Явный путь исключает зависимость от установки Handy и поиска в интернете.
         if (native / "libtranscribe.dylib").exists():
@@ -86,10 +107,12 @@ class Parakeet:
         self.model = transcribe_cpp.Model(str(models / "parakeet-tdt-0.6b-v3-Q8_0.gguf"))
         self.session = self.model.session()
         self.check_cancel = check_cancel
+        self.language = language
 
     def transcribe(self, audio):
         self.check_cancel()
-        result = self.session.run(np.ascontiguousarray(audio, dtype=np.float32))
+        result = self.session.run(np.ascontiguousarray(audio, dtype=np.float32), language=self.language, timestamps='word')
+        self.last_words = [dict(text=w.text,start=w.t0_ms/1000,end=w.t1_ms/1000) for w in result.words]
         self.check_cancel()
         return result.text.strip()
 

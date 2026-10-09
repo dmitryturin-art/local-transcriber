@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
+import Combine
 
 struct Segment: Codable, Identifiable, Equatable {
     var start: Double
@@ -12,6 +13,7 @@ struct Segment: Codable, Identifiable, Equatable {
     var overlap: Bool?
     var segmentID: String?
     var reviewed: Bool?
+    var languageWarning: Bool?
     var id: String { segmentID ?? "\(start)-\(end)-\(speaker ?? 0)" }
 }
 
@@ -26,6 +28,7 @@ struct Transcript: Codable, Equatable {
     var names: [String: String]
     var segments: [Segment]
     var processingSeconds: Double
+    var expectedLanguage: String?
 }
 
 struct TermRule: Codable, Identifiable, Equatable {
@@ -81,6 +84,11 @@ func timecode(_ seconds: Double, subtitle: Bool = false) -> String {
     return subtitle ? base + String(format: ",%03d", ms % 1000) : base
 }
 
+func speakerTint(_ speaker: Int) -> Color {
+    let colors: [Color] = [Color(red: 0.18, green: 0.39, blue: 0.79), .purple, .teal, .orange, .pink, .indigo, .brown, .green]
+    return colors[(max(1,speaker)-1) % colors.count]
+}
+
 final class AppModel: ObservableObject {
     @Published var input: URL?
     @Published var output: URL
@@ -116,6 +124,16 @@ final class AppModel: ObservableObject {
     @Published var canUndoEdit = false
     @Published var canRedoEdit = false
     @Published var editMessage = ""
+    @Published var showSpeakerLabels = true
+    @Published var showSpeakerTools = false
+    @Published var mergeFrom = 1
+    @Published var mergeInto = 2
+    @Published var reclusterCount = 2
+    @Published var expectedLanguage = UserDefaults.standard.string(forKey: "expectedLanguage") ?? "ru"
+    @Published var showModels = false
+    let modelManager = ModelManager()
+    private var modelUpdates: AnyCancellable?
+    private var extraJobFiles: [URL] = []
     private var rawDocument: [String: Any] = [:]
     private var originalDocument: Transcript?
     private var undoEdits: [EditSnapshot] = []
@@ -136,6 +154,7 @@ final class AppModel: ObservableObject {
         output = saved.map { URL(fileURLWithPath: $0) } ?? documents.appendingPathComponent("Транскрипции", isDirectory: true)
         if let data = UserDefaults.standard.data(forKey: "termRules"),
            let rules = try? JSONDecoder().decode([TermRule].self, from: data) { termRules = rules }
+        modelUpdates = modelManager.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 
     func selectFile() {
@@ -182,7 +201,24 @@ final class AppModel: ObservableObject {
     func start() {
         guard let input = input, !running else { return }
         guard confirmPendingEdits() else { return }
+        guard modelReady else { showModels = true; return }
+        if model == "gigaam" && expectedLanguage == "en" { error = "Для английской речи выберите Parakeet"; return }
         stopPlayback()
+        let request: [String: Any] = ["input": input.path, "output": output.path, "model": model,
+            "diarize": diarize, "speakers": speakerCount, "models": modelsDirectory.path, "language": expectedLanguage]
+        launchJob(request, keepResult: false)
+    }
+
+    var modelsDirectory: URL {
+        if let legacy = Bundle.main.resourceURL?.appendingPathComponent("models"), FileManager.default.fileExists(atPath: legacy.appendingPathComponent("speaker.onnx").path) { return legacy }
+        return modelManager.directory
+    }
+    var modelReady: Bool {
+        if modelsDirectory != modelManager.directory { return true }
+        return modelManager.available(model)
+    }
+
+    private func launchJob(_ request: [String: Any], keepResult: Bool) {
         guard let resources = Bundle.main.resourceURL else { error = "Не найдены ресурсы приложения"; return }
         let engine = resources.appendingPathComponent("engine/local-engine")
         guard FileManager.default.isExecutableFile(atPath: engine.path) else {
@@ -190,14 +226,13 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            let request: [String: Any] = ["input": input.path, "output": output.path,
-                "model": model, "diarize": diarize, "speakers": speakerCount]
             let requestURL = FileManager.default.temporaryDirectory.appendingPathComponent("local-transcriber-\(UUID().uuidString).json")
             try JSONSerialization.data(withJSONObject: request).write(to: requestURL, options: .atomic)
             self.requestURL = requestURL
             UserDefaults.standard.set(model, forKey: "asrModel")
             UserDefaults.standard.set(diarize, forKey: "diarize")
             UserDefaults.standard.set(speakerCount, forKey: "speakerCount")
+            UserDefaults.standard.set(expectedLanguage, forKey: "expectedLanguage")
             let task = Process()
             // Запрещаем сеть самому процессу, включая сторонние нативные библиотеки.
             task.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
@@ -241,9 +276,8 @@ final class AppModel: ObservableObject {
                 }
             }
             process = task
-            transcript = nil
-            resetEditor()
-            resultFolder = nil
+            if !keepResult { transcript = nil; resetEditor(); resultFolder = nil }
+            editing = false
             error = nil
             fragments = 0
             latestText = ""
@@ -289,6 +323,25 @@ final class AppModel: ObservableObject {
                 receivedTerminal = true
                 status = "Обработка отменена"
                 eta = nil
+            case "recluster_complete":
+                receivedTerminal = true; progress = 100
+                if let path = event["result"] as? String {
+                    do {
+                        let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+                        let corrected = try decoder.decode(Transcript.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+                        if var current = transcript, current.segments.count == corrected.segments.count {
+                            recordEdit()
+                            for index in current.segments.indices {
+                                current.segments[index].speaker = corrected.segments[index].speaker
+                                current.segments[index].uncertain = corrected.segments[index].uncertain
+                            }
+                            current.speakerCount = corrected.speakerCount; current.requestedSpeakers = reclusterCount
+                            current.diarized = true; current.names = [:]; transcript = current; names = [:]
+                            editMessage = "Голоса перераспределены. Проверьте реплики и задайте имена заново. Правку можно отменить."
+                            status = "Распределение голосов обновлено"
+                        }
+                    } catch { self.error = error.localizedDescription }
+                }
             case "error":
                 receivedTerminal = true
                 error = event["message"] as? String ?? "Не удалось обработать запись"
@@ -315,6 +368,8 @@ final class AppModel: ObservableObject {
     private func cleanupRequest() {
         if let requestURL = requestURL { try? FileManager.default.removeItem(at: requestURL) }
         requestURL = nil
+        for file in extraJobFiles { try? FileManager.default.removeItem(at: file) }
+        extraJobFiles = []
     }
 
     func cancel() {
@@ -362,14 +417,15 @@ final class AppModel: ObservableObject {
         return name.isEmpty ? "Спикер \(speaker)" : name
     }
 
-    func textExports() -> (String, String) {
+    func textExports(includeSpeakers: Bool = true) -> (String, String) {
         guard let transcript = transcript else { return ("", "") }
         var lines = ["Транскрипция: \(transcript.source)", "Модель: \(transcript.model) · Длительность: \(timecode(transcript.duration))",
                      "Автоматическая расшифровка. [?] — голос определён неуверенно; [перекрытие] — одновременная речь.", ""]
         var subtitles: [String] = []
         for (index, row) in transcript.segments.enumerated() {
             let markers = (row.uncertain == true ? " [?]" : "") + (row.overlap == true ? " [перекрытие]" : "")
-            let prefix = row.speaker != nil ? "\(label(row.speaker))\(markers): " : ""
+            let prefix = includeSpeakers && row.speaker != nil ? "\(label(row.speaker))\(markers): "
+                : (includeSpeakers && transcript.diarized ? "Спикер не определён\(markers): " : "")
             let text = row.text
             lines.append("[\(timecode(row.start))] \(prefix)\(text)")
             lines.append("")
@@ -392,7 +448,7 @@ final class AppModel: ObservableObject {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             // Сохраняем исходные файлы один раз, до первого редактирования.
             if !FileManager.default.fileExists(atPath: folder.appendingPathComponent("transcript.original.json").path) {
-              for suffix in ["json", "txt", "md", "srt"] {
+              for suffix in ["json", "txt", "md", "srt", "no-speakers.txt", "no-speakers.md", "no-speakers.srt"] {
                 let source = folder.appendingPathComponent("transcript.\(suffix)")
                 let backup = folder.appendingPathComponent("transcript.original.\(suffix)")
                 if FileManager.default.fileExists(atPath: source.path) && !FileManager.default.fileExists(atPath: backup.path) {
@@ -407,7 +463,7 @@ final class AppModel: ObservableObject {
             let editedRows = encoded["segments"] as? [[String: Any]] ?? []
             document["segments"] = editedRows.enumerated().map { index, row -> [String: Any] in
                 var preserved = index < originalRows.count ? originalRows[index] : [:]
-                for key in ["speaker", "uncertain", "overlap", "reviewed", "segment_id"] where row[key] == nil {
+                for key in ["speaker", "uncertain", "overlap", "reviewed", "segment_id", "language_warning"] where row[key] == nil {
                     preserved.removeValue(forKey: key)
                 }
                 for (key, value) in row { preserved[key] = value }
@@ -419,6 +475,10 @@ final class AppModel: ObservableObject {
             try ("# " + text).write(to: folder.appendingPathComponent("transcript.md"), atomically: true, encoding: .utf8)
             try subtitles.write(to: folder.appendingPathComponent("transcript.srt"), atomically: true, encoding: .utf8)
             try json.write(to: folder.appendingPathComponent("transcript.json"), options: .atomic)
+            let (plain, plainSRT) = textExports(includeSpeakers: false)
+            try plain.write(to: folder.appendingPathComponent("transcript.no-speakers.txt"), atomically: true, encoding: .utf8)
+            try ("# "+plain).write(to: folder.appendingPathComponent("transcript.no-speakers.md"), atomically: true, encoding: .utf8)
+            try plainSRT.write(to: folder.appendingPathComponent("transcript.no-speakers.srt"), atomically: true, encoding: .utf8)
             rawDocument = document
             namesSaved = true
             hasUnsavedChanges = false
@@ -547,7 +607,7 @@ final class AppModel: ObservableObject {
         guard let document = transcript else { return [] }
         return document.segments.indices.filter { index in
             let row = document.segments[index]
-            let issue = (row.uncertain == true || row.overlap == true) && row.reviewed != true
+            let issue = (row.uncertain == true || row.overlap == true || row.languageWarning == true) && row.reviewed != true
             return (!onlyIssues || issue) && (searchText.isEmpty || row.text.localizedCaseInsensitiveContains(searchText))
         }
     }
@@ -606,6 +666,43 @@ final class AppModel: ObservableObject {
         guard replacements > 0 else { editMessage = "Совпадений со словарём нет"; return }
         recordEdit(); transcript = document
         editMessage = "Словарь применён: \(replacements) замен. Можно отменить."
+    }
+
+    func mergeSpeakers() {
+        guard !running, var document = transcript, mergeFrom != mergeInto,
+              mergeFrom >= 1, mergeInto >= 1, mergeFrom <= document.speakerCount, mergeInto <= document.speakerCount else { return }
+        recordEdit()
+        var changed = 0
+        for index in document.segments.indices {
+            if document.segments[index].speaker == mergeFrom {
+                document.segments[index].speaker = mergeInto; document.segments[index].uncertain = false; changed += 1
+            }
+            if let id = document.segments[index].speaker, id > mergeFrom { document.segments[index].speaker = id-1 }
+        }
+        var updated: [String:String] = [:]
+        for (key,value) in names {
+            if let id = Int(key), id != mergeFrom { updated[String(id > mergeFrom ? id-1 : id)] = value }
+        }
+        names = updated; document.names = updated; document.speakerCount -= 1; transcript = document
+        editMessage = "Объединено реплик: \(changed). Можно отменить."
+        showSpeakerTools = false
+    }
+
+    func recalculateSpeakers() {
+        guard !running, let document = transcript, let folder = resultFolder else { return }
+        let cache = folder.appendingPathComponent("voiceprints.npz")
+        guard input != nil || FileManager.default.fileExists(atPath: cache.path) else { error = "Для старой транскрипции укажите исходную запись"; return }
+        do {
+            let base = FileManager.default.temporaryDirectory.appendingPathComponent("voices-\(UUID().uuidString)")
+            let snapshot = base.appendingPathExtension("json"); let result = base.appendingPathExtension("result.json")
+            let encoder = JSONEncoder(); encoder.keyEncodingStrategy = .convertToSnakeCase
+            try encoder.encode(document).write(to: snapshot, options: .atomic)
+            extraJobFiles = [snapshot,result]
+            var request: [String:Any] = ["action":"recluster", "document":snapshot.path, "result":result.path,
+                "voiceprints":cache.path, "speakers":reclusterCount, "models":modelsDirectory.path]
+            if let input = input { request["input"] = input.path }
+            showSpeakerTools = false; launchJob(request, keepResult: true)
+        } catch { self.error = error.localizedDescription }
     }
 
     func copyText() {
@@ -667,15 +764,19 @@ struct ContentView: View {
         }
         .frame(minWidth: 920, minHeight: 700)
         .tint(accent)
+        .onAppear { if !state.modelReady { state.showModels = true } }
         .sheet(isPresented: $state.showReplacement) { ReplacementPanel(state: state) }
         .sheet(isPresented: $state.showDictionary) { DictionaryPanel(state: state) }
+        .sheet(isPresented: $state.showSpeakerTools) { SpeakerToolsPanel(state: state) }
+        .sheet(isPresented: $state.showModels) { ModelsPanel(state: state, manager: state.modelManager) }
         .alert("Не удалось выполнить действие", isPresented: Binding(get: { state.error != nil }, set: { if !$0 { state.error = nil } })) {
             Button("Понятно", role: .cancel) { state.error = nil }
         } message: { Text(state.error ?? "") }
     }
 
     private var settings: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(spacing: 0) {
+            ScrollView { VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
                 Image(systemName: "waveform.circle.fill").font(.system(size: 38)).foregroundStyle(accent)
                 VStack(alignment: .leading, spacing: 3) {
@@ -711,7 +812,11 @@ struct ContentView: View {
                     Text("GigaAM v3").tag("gigaam")
                     Text("Parakeet v3").tag("parakeet")
                 }.pickerStyle(.segmented).labelsHidden().disabled(state.running)
-                Text(state.model == "gigaam" ? "Русская речь · с пунктуацией" : "Несколько языков · с пунктуацией")
+                Button("Управление моделями") { state.showModels = true }.disabled(state.running)
+                Picker("Ожидаемый язык", selection: $state.expectedLanguage) {
+                    Text("Русский").tag("ru"); Text("Английский").tag("en"); Text("Русский + английский").tag("auto")
+                }.disabled(state.running)
+                Text(state.model == "gigaam" ? "Русская речь · с пунктуацией" : "Ожидаемый язык не гарантирует отсутствие чужих слов; они отмечаются для проверки")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             VStack(alignment: .leading, spacing: 12) {
@@ -738,7 +843,9 @@ struct ContentView: View {
                 Text("TXT · Markdown · SRT\nПлюс JSON для повторного открытия")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Spacer(minLength: 10)
+            }.padding(24) }
+            Divider()
+            VStack {
             if state.running {
                 Button(state.cancelling ? "Остановка…" : "Отменить обработку", role: .destructive) { state.cancel() }
                     .frame(maxWidth: .infinity).disabled(state.cancelling)
@@ -747,7 +854,8 @@ struct ContentView: View {
                     HStack { Image(systemName: "play.fill"); Text("Расшифровать").fontWeight(.semibold) }.frame(maxWidth: .infinity).padding(.vertical, 7)
                 }.buttonStyle(.borderedProminent).disabled(state.input == nil).keyboardShortcut(.return, modifiers: [])
             }
-        }.padding(24).background(Color(nsColor: .windowBackgroundColor))
+            }.padding(20)
+        }.background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func sectionLabel(_ text: String) -> some View {
@@ -792,6 +900,7 @@ struct ContentView: View {
 
     private func result(_ transcript: Transcript) -> some View {
         VStack(spacing: 0) {
+            if state.running { HStack { ProgressView(value:state.progress,total:100); Text(state.status).font(.caption) }.padding(14) }
             if transcript.diarized && transcript.speakerCount > 0 {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
@@ -826,7 +935,7 @@ struct ContentView: View {
             }
             Divider()
             HStack {
-                Text(state.hasUnsavedChanges ? "Есть несохранённые правки" : "TXT · MD · SRT сохранены")
+                Text(state.hasUnsavedChanges ? "Есть несохранённые правки" : "Сохранены обе версии")
                     .font(.caption).foregroundStyle(state.hasUnsavedChanges ? Color.orange : Color.secondary)
                 Spacer()
                 if state.input == nil { Button("Указать исходную запись") { state.selectFile() } }
@@ -847,10 +956,12 @@ struct ContentView: View {
                 Spacer()
                 Button("Найти и заменить") { state.showReplacement = true }
                 Button("Словарь") { state.showDictionary = true }
+                Button("Спикеры") { state.showSpeakerTools = true }
             }
             HStack {
                 TextField("Поиск по тексту", text: $state.searchText).textFieldStyle(.roundedBorder)
                 Toggle("Требуют проверки", isOn: $state.onlyIssues).toggleStyle(.checkbox)
+                Toggle("Спикеры", isOn: $state.showSpeakerLabels).toggleStyle(.checkbox)
             }
             if state.editing {
                 HStack {
@@ -863,6 +974,7 @@ struct ContentView: View {
             if !state.editMessage.isEmpty { Text(state.editMessage).font(.caption).foregroundStyle(.secondary) }
         }.padding(.horizontal, 28).padding(.vertical, 14)
         .background(Color(nsColor: .controlBackgroundColor))
+        .disabled(state.running)
     }
 
     private func speakerColor(_ speaker: Int) -> Color {
@@ -883,16 +995,19 @@ struct SegmentEditorRow: View {
                         Label(timecode(row.start), systemImage: "play.circle")
                             .font(.system(size: 11, design: .monospaced))
                     }.buttonStyle(.plain).foregroundStyle(.secondary).disabled(state.input == nil)
-                    if state.editing && document.speakerCount > 0 {
+                    if state.editing && document.speakerCount > 0 && state.showSpeakerLabels {
                         Picker("Спикер", selection: Binding(get: { row.speaker ?? 0 }, set: { state.editSpeaker(index, $0, id: row.id) })) {
                             Text("Без спикера").tag(0)
                             ForEach(1...document.speakerCount, id: \.self) { n in Text(state.label(n)).tag(n) }
                         }.labelsHidden().frame(maxWidth: 180)
-                    } else if let speaker = row.speaker {
-                        Text(state.label(speaker)).font(.system(size: 12, weight: .semibold)).foregroundStyle(.blue)
+                    } else if let speaker = row.speaker, state.showSpeakerLabels {
+                        Text(state.label(speaker)).font(.system(size: 12, weight: .semibold)).foregroundStyle(speakerTint(speaker))
+                    } else if state.showSpeakerLabels && document.diarized {
+                        Text("Спикер не определён").font(.caption).foregroundStyle(.secondary)
                     }
                     if row.overlap == true { Text("Одновременная речь").font(.caption2).foregroundStyle(.orange) }
                     else if row.uncertain == true { Text("Голос неуверенно").font(.caption2).foregroundStyle(.secondary) }
+                    if row.languageWarning == true { Text("Проверить язык").font(.caption2).foregroundStyle(.orange) }
                     Spacer()
                     Button { state.markReviewed(index) } label: {
                         Image(systemName: row.reviewed == true ? "checkmark.seal.fill" : "checkmark.seal")

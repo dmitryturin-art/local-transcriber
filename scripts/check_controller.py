@@ -13,7 +13,7 @@ args = parser.parse_args()
 app = root / "build/controller-check.app"
 if app.exists():
     shutil.rmtree(app)
-subprocess.run(["cp", "-cR", str(root / "dist/Голоса.app"), str(app)], check=True)
+subprocess.run(["cp", "-cR", str(root / "dist/release-1.2/Голоса.app"), str(app)], check=True)
 source = (root / "macos/LocalTranscriber.swift").read_text()
 prefix = source[:source.index("@main\nstruct LocalTranscriberApp")]
 generated = root / "build/Controller.swift"
@@ -26,6 +26,6 @@ info_path.write_bytes(plistlib.dumps(info))
 binary = app / "Contents/MacOS/ControllerCheck"
 subprocess.run(["swiftc", "-swift-version", "5", "-parse-as-library", "-target", "arm64-apple-macos14.0",
                 "-module-cache-path", str(root / "build/swift-cache"), str(generated),
-                str(root / "tests/ControllerSmokeTest.swift"), "-o", str(binary)], check=True)
+                str(root / "tests/ControllerSmokeTest.swift"), *[str(p) for p in (root/"macos").glob("*.swift") if p.name != "LocalTranscriber.swift"], "-o", str(binary)], check=True)
 subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
 subprocess.run([str(binary), str(args.audio.resolve()), str(root / "build/controller-results"), args.model], check=True)

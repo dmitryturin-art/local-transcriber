@@ -1,0 +1,79 @@
+[
+  {
+    "path": "gigaam-e2e/v3_rnnt_decoder.onnx",
+    "group": "gigaam",
+    "url": "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/322c3b29492673eb7d0b434bfa9dfb8653e34d02/v3_e2e_rnnt_decoder.onnx",
+    "size": 4599910,
+    "sha256": "7b0a16d67fd2cb37061decc93c69e364a9ab27afee3c57495d55b1c974cf7231",
+    "acceptedHashes": [
+      "e9de6c1c7d81681d2337c5083c398349747b8a478318a63a9c9bae754f86d6ec"
+    ],
+    "acceptedSizes": [
+      4599930
+    ]
+  },
+  {
+    "path": "gigaam-e2e/v3_rnnt_encoder.onnx",
+    "group": "gigaam",
+    "url": "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/322c3b29492673eb7d0b434bfa9dfb8653e34d02/v3_e2e_rnnt_encoder.onnx",
+    "size": 885084534,
+    "sha256": "cd60b3764a832e8560ae6d3ad0b10adc1a42ffae412b9476f25620aae4f4a508",
+    "acceptedHashes": [
+      "ab5d548acce4c7108bb74bfc36a261989293b1c3d6db98c81f31bebb1708f99f"
+    ],
+    "acceptedSizes": [
+      885084495
+    ]
+  },
+  {
+    "path": "gigaam-e2e/v3_rnnt_joint.onnx",
+    "group": "gigaam",
+    "url": "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/322c3b29492673eb7d0b434bfa9dfb8653e34d02/v3_e2e_rnnt_joint.onnx",
+    "size": 2712896,
+    "sha256": "602ff7017a93311aad34df1437c8d7f49911353c13d6eae7a6ee7b041339465c",
+    "acceptedHashes": [
+      "602ff7017a93311aad34df1437c8d7f49911353c13d6eae7a6ee7b041339465c"
+    ],
+    "acceptedSizes": [
+      2712896
+    ]
+  },
+  {
+    "path": "parakeet/parakeet-tdt-0.6b-v3-Q8_0.gguf",
+    "group": "parakeet",
+    "url": "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/90f082450fcbacdb54e5900c44ef697c9ea59622/parakeet-tdt-0.6b-v3-Q8_0.gguf",
+    "size": 739508576,
+    "sha256": "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7",
+    "acceptedHashes": [],
+    "acceptedSizes": []
+  },
+  {
+    "path": "speaker.onnx",
+    "group": "shared",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
+    "size": 28281164,
+    "sha256": "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
+    "acceptedHashes": [],
+    "acceptedSizes": []
+  },
+  {
+    "path": "silero_vad.onnx",
+    "group": "shared",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+    "size": 643854,
+    "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+    "acceptedHashes": [],
+    "acceptedSizes": []
+  },
+  {
+    "path": "segmentation.onnx",
+    "group": "shared",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+    "size": 5992913,
+    "sha256": "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079",
+    "acceptedHashes": [],
+    "acceptedSizes": [],
+    "archiveMember": "sherpa-onnx-pyannote-segmentation-3-0/model.onnx",
+    "archiveSHA256": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488"
+  }
+]

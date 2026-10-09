@@ -102,6 +102,12 @@ struct EditorTests {
             check(try Data(contentsOf: source) == bytes, "Проверка больших текстов не меняет исходный файл")
             print("Длинная транскрипция: \(large.transcript!.segments.count) реплик, \(rows.count) совпавших реплик, \(Date().timeIntervalSince(began)) с")
         }
+        state.restoreOriginal(); state.mergeFrom=2; state.mergeInto=1; state.mergeSpeakers()
+        check(state.transcript!.speakerCount == 1 && state.transcript!.segments.allSatisfy { $0.speaker == 1 }, "Объединение спикеров")
+        state.undoEdit()
+        check(state.transcript!.speakerCount == 2, "Объединение можно отменить")
+        let plain=state.textExports(includeSpeakers:false).0
+        check(!plain.contains("Спикер 1:") && !plain.contains("Спикер 2:"), "Экспорт без спикеров")
         print("Редактор: \(checks) проверок — OK")
     }
 }

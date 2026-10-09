@@ -19,7 +19,7 @@ binary.parent.mkdir(parents=True, exist_ok=True)
 (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "local.voices.editor-tests",
     "CFBundleExecutable": "EditorTests", "CFBundlePackageType": "APPL"}))
 subprocess.run(["swiftc", "-swift-version", "5", "-parse-as-library", "-target", "arm64-apple-macos14.0",
-    "-module-cache-path", str(build / "swift-cache"), str(generated), str(root / "tests/EditorTests.swift"), "-o", str(binary)], check=True)
+    "-module-cache-path", str(build / "swift-cache"), str(generated), str(root / "tests/EditorTests.swift"), *[str(p) for p in (root/"macos").glob("*.swift") if p.name != "LocalTranscriber.swift"], "-o", str(binary)], check=True)
 command = [str(binary)]
 if args.transcript:
     command.append(str(args.transcript.resolve()))

@@ -81,9 +81,9 @@ def main():
     parser.add_argument("--dmg", action="store_true")
     args = parser.parse_args()
     build = ROOT / "build"
-    dist = ROOT / "dist"
+    dist = ROOT / "dist" / "release-1.2"
     build.mkdir(exist_ok=True)
-    dist.mkdir(exist_ok=True)
+    dist.mkdir(parents=True,exist_ok=True)
     os.environ["PYINSTALLER_CONFIG_DIR"] = str(build / "pyinstaller-cache")
     app = dist / "Голоса.app"
     resources = app / "Contents/Resources"
@@ -105,15 +105,19 @@ def main():
         shutil.copytree(build / "engine-dist/local-engine", engine)
     if (resources / "models").exists():
         shutil.rmtree(resources / "models")
-    run(["cp", "-cR", ROOT / "models", resources / "models"])
+    shutil.copy2(ROOT / "model-catalog.json", resources / "model-catalog.json")
+    support=resources/"model-support/gigaam-e2e"
+    support.mkdir(parents=True,exist_ok=True)
+    for name in ("features.json","tokenizer.model"):
+        shutil.copy2(ROOT/"models/gigaam-e2e"/name,support/name)
     for directory in (resources / "bin", resources / "lib"):
         if directory.exists():
             shutil.rmtree(directory)
     bundle_ffmpeg(resources)
     run(["swiftc", "-swift-version", "5", "-O", "-parse-as-library", "-target", "arm64-apple-macos14.0",
-         "-module-cache-path", build / "swift-cache", ROOT / "macos/LocalTranscriber.swift", "-o", executable])
+         "-module-cache-path", build / "swift-cache", *[str(p) for p in sorted((ROOT/"macos").glob("*.swift"))], "-o", executable])
     info = {"CFBundleName": "Голоса", "CFBundleDisplayName": "Голоса", "CFBundleExecutable": "LocalTranscriber",
-            "CFBundleIdentifier": "local.voices.transcriber", "CFBundleVersion": "2", "CFBundleShortVersionString": "1.1.0",
+            "CFBundleIdentifier": "local.voices.transcriber", "CFBundleVersion": "3", "CFBundleShortVersionString": "1.2.0",
             "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "14.0", "NSHighResolutionCapable": True,
             "CFBundleIconFile": "AppIcon", "NSHumanReadableCopyright": "Локальный транскрибатор · 2026"}
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
@@ -146,7 +150,7 @@ def main():
         run(["cp", "-cR", app, installer / app.name])
         (installer / "Applications").symlink_to("/Applications")
         shutil.copy2(ROOT / "INSTALL.txt", installer / "Как установить.txt")
-        dmg = dist / "Голоса-1.1.0-AppleSilicon.dmg"
+        dmg = dist / "Голоса-1.2.0-AppleSilicon.dmg"
         if dmg.exists():
             dmg.unlink()
         run(["hdiutil", "create", "-volname", "Голоса", "-srcfolder", installer,

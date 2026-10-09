@@ -130,6 +130,13 @@ final class AppModel: ObservableObject {
     @Published var mergeInto = 2
     @Published var reclusterCount = 2
     @Published var expectedLanguage = UserDefaults.standard.string(forKey: "expectedLanguage") ?? "ru"
+    @Published var showLibrary = false
+    @Published var showHelp = false
+    @Published var previewStatus = ""
+    @Published var playbackTime = 0.0
+    @Published var followPlayback = true
+    @Published var activeSegmentID: String?
+    private var previewSource: URL?
     @Published var showModels = false
     let modelManager = ModelManager()
     private var modelUpdates: AnyCancellable?
@@ -144,7 +151,11 @@ final class AppModel: ObservableObject {
     private var requestURL: URL?
     private var outputBuffer = Data()
     private var diagnostics = Data()
-    private var player: AVPlayer?
+    private var player: AVAudioPlayer?
+    private var previewProcess: Process?
+    private var previewFile: URL?
+    private var previewTimer: Timer?
+    private var previewToken = UUID()
     private var playbackObserver: Any?
     private var receivedTerminal = false
 
@@ -174,6 +185,11 @@ final class AppModel: ObservableObject {
         stopPlayback()
         if input == nil, let transcript = transcript, transcript.source == url.lastPathComponent {
             input = url
+            if let folder = resultFolder {
+                var paths = UserDefaults.standard.dictionary(forKey: "transcriptAudioPaths") ?? [:]
+                paths[folder.appendingPathComponent("transcript.json").path] = url.path
+                UserDefaults.standard.set(paths, forKey: "transcriptAudioPaths")
+            }
             return
         }
         guard confirmPendingEdits() else { return }
@@ -397,6 +413,12 @@ final class AppModel: ObservableObject {
             namesSaved = false
             resetEditor()
             if input?.lastPathComponent != result.source { input = nil }
+            if input == nil, let saved = UserDefaults.standard.dictionary(forKey: "transcriptAudioPaths")?[url.path] as? String,
+               FileManager.default.fileExists(atPath: saved) { input = URL(fileURLWithPath: saved) }
+            if let input = input {
+                var paths = UserDefaults.standard.dictionary(forKey: "transcriptAudioPaths") ?? [:]
+                paths[url.path] = input.path; UserDefaults.standard.set(paths, forKey: "transcriptAudioPaths")
+            }
         } catch { self.error = "Не удалось открыть результат: \(error.localizedDescription)" }
     }
 
@@ -715,24 +737,69 @@ final class AppModel: ObservableObject {
     }
 
     func play(at seconds: Double) {
-        guard let input = input else { return }
+        guard let input = input else { error = "Для прослушивания выберите исходную запись через кнопку «Запись». Текст останется открытым, если имя файла совпадает."; return }
+        if let sound = player, previewSource == input {
+            seekPlayback(seconds); sound.play(); playing = true; return
+        }
         stopPlayback()
-        let audio = AVPlayer(url: input)
-        player = audio
-        audio.seek(to: CMTime(seconds: seconds, preferredTimescale: 1000), toleranceBefore: .zero, toleranceAfter: .zero)
-        audio.play()
-        playing = true
-        playbackObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
-            object: audio.currentItem, queue: .main) { [weak self] _ in self?.stopPlayback() }
+        let token = UUID(); previewToken = token
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("voices-preview-\(token).wav")
+        guard let converter = Bundle.main.resourceURL?.appendingPathComponent("bin/ffmpeg"), FileManager.default.isExecutableFile(atPath: converter.path) else {
+            error = "Не найден встроенный конвертер аудио"; return
+        }
+        let job = Process(); job.executableURL = converter
+        job.arguments = ["-nostdin", "-v", "error", "-i", input.path, "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", "-y", file.path]
+        job.standardOutput = FileHandle.nullDevice; job.standardError = FileHandle.nullDevice
+        previewProcess = job; previewFile = file; previewStatus = "Подготовка звука…"
+        job.terminationHandler = { [weak self] task in
+            DispatchQueue.main.async {
+                guard let self = self, self.previewToken == token else { try? FileManager.default.removeItem(at: file); return }
+                self.previewProcess = nil; self.previewStatus = ""
+                guard task.terminationStatus == 0 else { self.stopPlayback(); self.error = "Не удалось прочитать исходное аудио. Проверьте, что файл доступен."; return }
+                do {
+                    let sound = try AVAudioPlayer(contentsOf: file)
+                    sound.volume = 1; sound.currentTime = max(0,seconds); sound.prepareToPlay()
+                    guard sound.play() else { throw NSError(domain: "Audio", code: 1) }
+                    self.player = sound; self.previewSource = input; self.playing = true; self.updatePlaybackTime(sound.currentTime)
+                    self.previewTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                        guard let self = self, let audio = self.player else { return }
+                        self.updatePlaybackTime(audio.currentTime)
+                        if self.playing && !audio.isPlaying { self.playing = false }
+                    }
+                } catch { self.stopPlayback(); self.error = "Не удалось включить звук: \(error.localizedDescription)" }
+            }
+        }
+        do { try job.run() } catch { stopPlayback(); self.error = "Не удалось подготовить звук: \(error.localizedDescription)" }
     }
 
     func stopPlayback() {
-        player?.pause()
-        player = nil
-        if let observer = playbackObserver { NotificationCenter.default.removeObserver(observer) }
-        playbackObserver = nil
-        playing = false
+        previewToken = UUID()
+        if let job = previewProcess, job.isRunning { job.terminate() }
+        previewProcess = nil
+        player?.stop(); player = nil
+        previewTimer?.invalidate(); previewTimer = nil
+        if let file = previewFile { try? FileManager.default.removeItem(at: file) }
+        previewFile = nil; previewSource = nil; previewStatus = ""; playing = false; playbackTime = 0; activeSegmentID = nil
     }
+
+    func updatePlaybackTime(_ seconds: Double) {
+        playbackTime = seconds
+        activeSegmentID = transcript?.segments.last(where: { $0.start <= seconds && $0.end >= seconds })?.id
+    }
+    func seekPlayback(_ seconds: Double) {
+        player?.currentTime = seconds
+        updatePlaybackTime(seconds)
+    }
+    func togglePlayback() {
+        if playing { player?.pause(); playing = false }
+        else { play(at: playbackTime) }
+    }
+
+    func openLibraryResult(_ url: URL) {
+        guard !running, confirmPendingEdits() else { return }
+        stopPlayback(); loadResult(url); showLibrary = false
+    }
+
 }
 
 struct ContentView: View {
@@ -753,6 +820,8 @@ struct ContentView: View {
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     Spacer()
+                    Button("Мои транскрипции") { state.showLibrary = true }.disabled(state.running)
+                    Button { state.showHelp = true } label: { Image(systemName: "questionmark.circle") }.help("Как пользоваться")
                     Button { state.openResult() } label: { Image(systemName: "folder") }
                         .help("Открыть сохранённую транскрипцию").disabled(state.running)
                 }.padding(28)
@@ -765,6 +834,8 @@ struct ContentView: View {
         .frame(minWidth: 920, minHeight: 700)
         .tint(accent)
         .onAppear { if !state.modelReady { state.showModels = true } }
+        .sheet(isPresented: $state.showLibrary) { TranscriptLibraryPanel(state: state) }
+        .sheet(isPresented: $state.showHelp) { HelpPanel() }
         .sheet(isPresented: $state.showReplacement) { ReplacementPanel(state: state) }
         .sheet(isPresented: $state.showDictionary) { DictionaryPanel(state: state) }
         .sheet(isPresented: $state.showSpeakerTools) { SpeakerToolsPanel(state: state) }
@@ -852,7 +923,7 @@ struct ContentView: View {
             } else {
                 Button { state.start() } label: {
                     HStack { Image(systemName: "play.fill"); Text("Расшифровать").fontWeight(.semibold) }.frame(maxWidth: .infinity).padding(.vertical, 7)
-                }.buttonStyle(.borderedProminent).disabled(state.input == nil).keyboardShortcut(.return, modifiers: [])
+                }.buttonStyle(.borderedProminent).disabled(state.input == nil).keyboardShortcut("r", modifiers: [.command, .shift])
             }
             }.padding(20)
         }.background(Color(nsColor: .windowBackgroundColor))
@@ -925,14 +996,30 @@ struct ContentView: View {
                 Divider()
             }
             editorToolbar
+            ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 19) {
                     ForEach(state.visibleIndices, id: \.self) { index in
-                        SegmentEditorRow(state: state, index: index)
+                        SegmentEditorRow(state: state, index: index).padding(8).background(state.activeSegmentID == transcript.segments[index].id ? accent.opacity(0.10) : Color.clear).cornerRadius(8).id(transcript.segments[index].id)
                     }
                     if state.visibleIndices.isEmpty { Text("Подходящих реплик нет").foregroundStyle(.secondary) }
                 }.padding(28)
             }
+            .onChange(of: state.activeSegmentID) { _, id in
+                if state.followPlayback && !state.editing, let id = id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
+            }
+            }
+            VStack(spacing: 6) {
+                HStack {
+                    Button { state.togglePlayback() } label: { Image(systemName: state.playing ? "pause.fill" : "play.fill") }
+                        .help("Воспроизведение / пауза").disabled(!state.previewStatus.isEmpty)
+                    Text(timecode(state.playbackTime)).monospacedDigit()
+                    Slider(value: Binding(get: { state.playbackTime }, set: { state.seekPlayback($0) }), in: 0...max(1,transcript.duration))
+                    Text(timecode(transcript.duration)).monospacedDigit()
+                    Toggle("Следовать за звуком", isOn: $state.followPlayback).toggleStyle(.checkbox)
+                }
+                if !state.previewStatus.isEmpty { Text(state.previewStatus).font(.caption).foregroundStyle(.secondary) }
+            }.padding(.horizontal,28).padding(.vertical,10)
             Divider()
             HStack {
                 Text(state.hasUnsavedChanges ? "Есть несохранённые правки" : "Сохранены обе версии")
@@ -994,7 +1081,7 @@ struct SegmentEditorRow: View {
                     Button { state.play(at: row.start) } label: {
                         Label(timecode(row.start), systemImage: "play.circle")
                             .font(.system(size: 11, design: .monospaced))
-                    }.buttonStyle(.plain).foregroundStyle(.secondary).disabled(state.input == nil)
+                    }.buttonStyle(.plain).foregroundStyle(.secondary).help("Слушать запись с этой отметки")
                     if state.editing && document.speakerCount > 0 && state.showSpeakerLabels {
                         Picker("Спикер", selection: Binding(get: { row.speaker ?? 0 }, set: { state.editSpeaker(index, $0, id: row.id) })) {
                             Text("Без спикера").tag(0)
@@ -1005,6 +1092,7 @@ struct SegmentEditorRow: View {
                     } else if state.showSpeakerLabels && document.diarized {
                         Text("Спикер не определён").font(.caption).foregroundStyle(.secondary)
                     }
+                    if !state.previewStatus.isEmpty { Text(state.previewStatus).font(.caption2) }
                     if row.overlap == true { Text("Одновременная речь").font(.caption2).foregroundStyle(.orange) }
                     else if row.uncertain == true { Text("Голос неуверенно").font(.caption2).foregroundStyle(.secondary) }
                     if row.languageWarning == true { Text("Проверить язык").font(.caption2).foregroundStyle(.orange) }
@@ -1153,7 +1241,9 @@ struct LocalTranscriberApp: App {
                 CommandGroup(replacing: .saveItem) {
                     Button("Сохранить правки") { state.saveEdits() }.keyboardShortcut("s").disabled(!state.hasUnsavedChanges || state.running)
                 }
+                CommandGroup(replacing: .help) { Button("Как пользоваться «Голоса»") { state.showHelp = true } }
                 CommandMenu("Транскрипция") {
+                    Button("Мои транскрипции…") { state.showLibrary = true }.disabled(state.running)
                     Button("Найти и заменить…") { state.showReplacement = true }.keyboardShortcut("f").disabled(state.transcript == nil || state.running)
                     Button("Словарь исправлений…") { state.showDictionary = true }.disabled(state.running)
                 }

@@ -8,7 +8,7 @@ struct EditorTests {
         defer { UserDefaults.standard.removePersistentDomain(forName: domain) }
         var checks = 0
         func check(_ value: Bool, _ message: String) {
-            precondition(value, message); checks += 1
+            if !value { fputs("Проверка не пройдена: \(message)\n", stderr); exit(1) }; checks += 1
         }
         let (literal, count) = TextReplacement.apply("Гигам2 Гигам_сервис суперГигам 👋 ГИГАМ",
             find: "гигам", replacement: "$1\\путь", caseSensitive: false, wholeWord: true)
@@ -108,6 +108,12 @@ struct EditorTests {
         check(state.transcript!.speakerCount == 2, "Объединение можно отменить")
         let plain=state.textExports(includeSpeakers:false).0
         check(!plain.contains("Спикер 1:") && !plain.contains("Спикер 2:"), "Экспорт без спикеров")
+        state.seekPlayback(8)
+        check(state.activeSegmentID == state.transcript!.segments[2].id && state.playbackTime == 8, "Таймлайн выбирает реплику")
+        state.seekPlayback(15)
+        check(state.activeSegmentID == nil, "Пауза между репликами не подсвечивает чужой текст")
+        let library = TranscriptLibrary.entries(in: folder.deletingLastPathComponent())
+        check(library.contains { $0.url.resolvingSymlinksInPath().path == url.resolvingSymlinksInPath().path }, "Библиотека находит сохранённый результат")
         print("Редактор: \(checks) проверок — OK")
     }
 }

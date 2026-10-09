@@ -11,6 +11,7 @@ struct ControllerSmokeTest {
         state.diarize = true
         state.speakerCount = 2
         state.model = args.count > 3 ? args[3] : "gigaam"
+        state.termRules = []; state.automaticDictionary = false
         state.start()
         let timeout = Date().addingTimeInterval(180)
         while state.running && Date() < timeout {
@@ -22,6 +23,12 @@ struct ControllerSmokeTest {
         state.names = ["1": "Юрий", "2": "Дмитрий"]
         state.saveNames()
         precondition(state.error == nil)
+        let start = state.transcript!.segments[0].start
+        state.editText(0, "Редактор проверен: GigaAM.")
+        state.findTerm = "GigaAM"; state.replaceTerm = "модель"; state.matchWholeWord = true
+        state.replaceAll(); state.editSpeaker(0, 2); state.saveEdits()
+        precondition(state.transcript!.segments[0].text == "Редактор проверен: модель.")
+        precondition(state.transcript!.segments[0].start == start)
         for name in ["transcript.txt", "transcript.md", "transcript.srt", "transcript.json"] {
             let text = try String(contentsOf: folder.appendingPathComponent(name), encoding: .utf8)
             precondition(text.contains("Дмитрий") && text.contains("Юрий"))

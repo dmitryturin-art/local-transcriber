@@ -113,7 +113,7 @@ def main():
     run(["swiftc", "-swift-version", "5", "-O", "-parse-as-library", "-target", "arm64-apple-macos14.0",
          "-module-cache-path", build / "swift-cache", ROOT / "macos/LocalTranscriber.swift", "-o", executable])
     info = {"CFBundleName": "Голоса", "CFBundleDisplayName": "Голоса", "CFBundleExecutable": "LocalTranscriber",
-            "CFBundleIdentifier": "local.voices.transcriber", "CFBundleVersion": "1", "CFBundleShortVersionString": "1.0.0",
+            "CFBundleIdentifier": "local.voices.transcriber", "CFBundleVersion": "2", "CFBundleShortVersionString": "1.1.0",
             "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "14.0", "NSHighResolutionCapable": True,
             "CFBundleIconFile": "AppIcon", "NSHumanReadableCopyright": "Локальный транскрибатор · 2026"}
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
@@ -146,7 +146,7 @@ def main():
         run(["cp", "-cR", app, installer / app.name])
         (installer / "Applications").symlink_to("/Applications")
         shutil.copy2(ROOT / "INSTALL.txt", installer / "Как установить.txt")
-        dmg = dist / "Голоса-1.0.0-AppleSilicon.dmg"
+        dmg = dist / "Голоса-1.1.0-AppleSilicon.dmg"
         if dmg.exists():
             dmg.unlink()
         run(["hdiutil", "create", "-volname", "Голоса", "-srcfolder", installer,

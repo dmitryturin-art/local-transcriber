@@ -3,17 +3,19 @@ import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
 
-struct Segment: Codable, Identifiable {
+struct Segment: Codable, Identifiable, Equatable {
     var start: Double
     var end: Double
     var text: String
     var speaker: Int?
     var uncertain: Bool?
     var overlap: Bool?
-    var id: String { "\(start)-\(end)-\(speaker ?? 0)" }
+    var segmentID: String?
+    var reviewed: Bool?
+    var id: String { segmentID ?? "\(start)-\(end)-\(speaker ?? 0)" }
 }
 
-struct Transcript: Codable {
+struct Transcript: Codable, Equatable {
     var version: Int
     var source: String
     var model: String
@@ -24,6 +26,53 @@ struct Transcript: Codable {
     var names: [String: String]
     var segments: [Segment]
     var processingSeconds: Double
+}
+
+struct TermRule: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var find: String
+    var replacement: String
+    var caseSensitive = false
+    var wholeWord = true
+}
+
+struct ReplacementPreview: Identifiable {
+    var index: Int
+    var start: Double
+    var before: String
+    var after: String
+    var count: Int
+    var id: Int { index }
+}
+
+enum TextReplacement {
+    static func pattern(find: String, caseSensitive: Bool, wholeWord: Bool) -> NSRegularExpression? {
+        guard !find.isEmpty else { return nil }
+        var pattern = NSRegularExpression.escapedPattern(for: find)
+        if wholeWord { pattern = "(?<![\\p{L}\\p{N}_])" + pattern + "(?![\\p{L}\\p{N}_])" }
+        let options: NSRegularExpression.Options = caseSensitive ? [] : [.caseInsensitive]
+        return try? NSRegularExpression(pattern: pattern, options: options)
+    }
+
+    static func apply(_ text: String, find: String, replacement: String,
+                      caseSensitive: Bool, wholeWord: Bool) -> (String, Int) {
+        guard let regex = pattern(find: find, caseSensitive: caseSensitive, wholeWord: wholeWord) else { return (text, 0) }
+        return apply(text, pattern: regex, replacement: replacement)
+    }
+
+    static func apply(_ text: String, pattern regex: NSRegularExpression, replacement: String) -> (String, Int) {
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length))
+        guard !matches.isEmpty else { return (text, 0) }
+        let result = NSMutableString(string: text)
+        // Вставляем буквально: $1 и обратные слеши в терминах не являются шаблонами.
+        for match in matches.reversed() { result.replaceCharacters(in: match.range, with: replacement) }
+        return (result as String, matches.count)
+    }
+}
+
+struct EditSnapshot {
+    var transcript: Transcript
+    var names: [String: String]
 }
 
 func timecode(_ seconds: Double, subtitle: Bool = false) -> String {
@@ -52,6 +101,27 @@ final class AppModel: ObservableObject {
     @Published var playing = false
     @Published var namesSaved = false
     @Published var targeted = false
+    @Published var editing = false
+    @Published var hasUnsavedChanges = false
+    @Published var showReplacement = false
+    @Published var showDictionary = false
+    @Published var searchText = ""
+    @Published var onlyIssues = false
+    @Published var findTerm = ""
+    @Published var replaceTerm = ""
+    @Published var matchCase = false
+    @Published var matchWholeWord = true
+    @Published var termRules: [TermRule] = []
+    @Published var automaticDictionary = UserDefaults.standard.bool(forKey: "automaticDictionary")
+    @Published var canUndoEdit = false
+    @Published var canRedoEdit = false
+    @Published var editMessage = ""
+    private var rawDocument: [String: Any] = [:]
+    private var originalDocument: Transcript?
+    private var undoEdits: [EditSnapshot] = []
+    private var redoEdits: [EditSnapshot] = []
+    private var lastEditGroup = ""
+    private var lastEditTime = Date.distantPast
     private var process: Process?
     private var requestURL: URL?
     private var outputBuffer = Data()
@@ -64,6 +134,8 @@ final class AppModel: ObservableObject {
         let saved = UserDefaults.standard.string(forKey: "outputFolder")
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         output = saved.map { URL(fileURLWithPath: $0) } ?? documents.appendingPathComponent("Транскрипции", isDirectory: true)
+        if let data = UserDefaults.standard.data(forKey: "termRules"),
+           let rules = try? JSONDecoder().decode([TermRule].self, from: data) { termRules = rules }
     }
 
     func selectFile() {
@@ -85,12 +157,14 @@ final class AppModel: ObservableObject {
             input = url
             return
         }
+        guard confirmPendingEdits() else { return }
         input = url
         transcript = nil
         resultFolder = nil
         error = nil
         progress = 0
         status = "Готово к обработке"
+        resetEditor()
     }
 
     func selectOutput() {
@@ -107,6 +181,7 @@ final class AppModel: ObservableObject {
 
     func start() {
         guard let input = input, !running else { return }
+        guard confirmPendingEdits() else { return }
         stopPlayback()
         guard let resources = Bundle.main.resourceURL else { error = "Не найдены ресурсы приложения"; return }
         let engine = resources.appendingPathComponent("engine/local-engine")
@@ -167,6 +242,7 @@ final class AppModel: ObservableObject {
             }
             process = task
             transcript = nil
+            resetEditor()
             resultFolder = nil
             error = nil
             fragments = 0
@@ -205,7 +281,10 @@ final class AppModel: ObservableObject {
                 progress = 100
                 eta = nil
                 status = "Транскрипция готова"
-                if let path = event["result"] as? String { loadResult(URL(fileURLWithPath: path)) }
+                if let path = event["result"] as? String {
+                    loadResult(URL(fileURLWithPath: path))
+                    if automaticDictionary && !termRules.isEmpty { applyTermDictionary(); saveEdits() }
+                }
             case "cancelled":
                 receivedTerminal = true
                 status = "Обработка отменена"
@@ -249,16 +328,25 @@ final class AppModel: ObservableObject {
         do {
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let result = try decoder.decode(Transcript.self, from: Data(contentsOf: url))
+            let data = try Data(contentsOf: url)
+            var result = try decoder.decode(Transcript.self, from: data)
+            for index in result.segments.indices {
+                if result.segments[index].segmentID == nil { result.segments[index].segmentID = UUID().uuidString }
+            }
+            rawDocument = (try JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+            let originalURL = url.deletingLastPathComponent().appendingPathComponent("transcript.original.json")
+            originalDocument = (try? Data(contentsOf: originalURL)).flatMap { try? decoder.decode(Transcript.self, from: $0) } ?? result
             transcript = result
             names = result.names
             resultFolder = url.deletingLastPathComponent()
             namesSaved = false
+            resetEditor()
             if input?.lastPathComponent != result.source { input = nil }
         } catch { self.error = "Не удалось открыть результат: \(error.localizedDescription)" }
     }
 
     func openResult() {
+        guard !running, confirmPendingEdits() else { return }
         let panel = NSOpenPanel()
         panel.title = "Открыть сохранённую транскрипцию"
         panel.allowedContentTypes = [.json]
@@ -282,7 +370,7 @@ final class AppModel: ObservableObject {
         for (index, row) in transcript.segments.enumerated() {
             let markers = (row.uncertain == true ? " [?]" : "") + (row.overlap == true ? " [перекрытие]" : "")
             let prefix = row.speaker != nil ? "\(label(row.speaker))\(markers): " : ""
-            let text = row.text.prefix(1).uppercased() + row.text.dropFirst()
+            let text = row.text
             lines.append("[\(timecode(row.start))] \(prefix)\(text)")
             lines.append("")
             subtitles.append("\(index + 1)\n\(timecode(row.start, subtitle: true)) --> \(timecode(row.end, subtitle: true))\n\(prefix)\(text)\n")
@@ -291,6 +379,10 @@ final class AppModel: ObservableObject {
     }
 
     func saveNames() {
+        saveEdits()
+    }
+
+    func saveEdits() {
         guard var transcript = transcript, let folder = resultFolder else { return }
         do {
             transcript.names = names.mapValues { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -298,13 +390,222 @@ final class AppModel: ObservableObject {
             let encoder = JSONEncoder()
             encoder.keyEncodingStrategy = .convertToSnakeCase
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            // Сохраняем исходные файлы один раз, до первого редактирования.
+            if !FileManager.default.fileExists(atPath: folder.appendingPathComponent("transcript.original.json").path) {
+              for suffix in ["json", "txt", "md", "srt"] {
+                let source = folder.appendingPathComponent("transcript.\(suffix)")
+                let backup = folder.appendingPathComponent("transcript.original.\(suffix)")
+                if FileManager.default.fileExists(atPath: source.path) && !FileManager.default.fileExists(atPath: backup.path) {
+                    try FileManager.default.copyItem(at: source, to: backup)
+                }
+              }
+            }
+            var document = rawDocument
+            let encoded = try JSONSerialization.jsonObject(with: encoder.encode(transcript)) as! [String: Any]
+            let originalRows = rawDocument["segments"] as? [[String: Any]] ?? []
+            for (key, value) in encoded where key != "segments" { document[key] = value }
+            let editedRows = encoded["segments"] as? [[String: Any]] ?? []
+            document["segments"] = editedRows.enumerated().map { index, row -> [String: Any] in
+                var preserved = index < originalRows.count ? originalRows[index] : [:]
+                for key in ["speaker", "uncertain", "overlap", "reviewed", "segment_id"] where row[key] == nil {
+                    preserved.removeValue(forKey: key)
+                }
+                for (key, value) in row { preserved[key] = value }
+                return preserved
+            }
+            let json = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
             let (text, subtitles) = textExports()
             try text.write(to: folder.appendingPathComponent("transcript.txt"), atomically: true, encoding: .utf8)
             try ("# " + text).write(to: folder.appendingPathComponent("transcript.md"), atomically: true, encoding: .utf8)
             try subtitles.write(to: folder.appendingPathComponent("transcript.srt"), atomically: true, encoding: .utf8)
-            try encoder.encode(transcript).write(to: folder.appendingPathComponent("transcript.json"), options: .atomic)
+            try json.write(to: folder.appendingPathComponent("transcript.json"), options: .atomic)
+            rawDocument = document
             namesSaved = true
-        } catch { self.error = "Не удалось сохранить имена: \(error.localizedDescription)" }
+            hasUnsavedChanges = false
+            lastEditGroup = ""
+            editMessage = "Правки сохранены во всех форматах"
+        } catch { self.error = "Не удалось сохранить правки: \(error.localizedDescription)" }
+    }
+
+    func resetEditor() {
+        undoEdits = []; redoEdits = []
+        canUndoEdit = false; canRedoEdit = false
+        hasUnsavedChanges = false; editing = false
+        searchText = ""; onlyIssues = false; editMessage = ""; lastEditGroup = ""
+    }
+
+    func confirmPendingEdits() -> Bool {
+        guard hasUnsavedChanges else { return true }
+        let alert = NSAlert()
+        alert.messageText = "Сохранить правки транскрипции?"
+        alert.informativeText = "Есть изменения текста или спикеров, которые ещё не сохранены."
+        alert.addButton(withTitle: "Сохранить")
+        alert.addButton(withTitle: "Не сохранять")
+        alert.addButton(withTitle: "Отмена")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: saveEdits(); return !hasUnsavedChanges
+        case .alertSecondButtonReturn: hasUnsavedChanges = false; return true
+        default: return false
+        }
+    }
+
+    private func snapshot() -> EditSnapshot? {
+        guard let transcript = transcript else { return nil }
+        return EditSnapshot(transcript: transcript, names: names)
+    }
+
+    private func recordEdit(_ group: String = UUID().uuidString) {
+        guard let snapshot = snapshot() else { return }
+        if group != lastEditGroup || Date().timeIntervalSince(lastEditTime) > 2 {
+            undoEdits.append(snapshot)
+            if undoEdits.count > 100 { undoEdits.removeFirst() }
+        }
+        lastEditGroup = group; lastEditTime = Date()
+        redoEdits = []
+        canUndoEdit = !undoEdits.isEmpty; canRedoEdit = false
+        hasUnsavedChanges = true; namesSaved = false; editMessage = ""
+    }
+
+    func undoEdit() {
+        guard !running, let previous = undoEdits.popLast(), let current = snapshot() else { return }
+        redoEdits.append(current); transcript = previous.transcript; names = previous.names
+        hasUnsavedChanges = true; lastEditGroup = ""; namesSaved = false
+        canUndoEdit = !undoEdits.isEmpty; canRedoEdit = true
+    }
+
+    func redoEdit() {
+        guard !running, let next = redoEdits.popLast(), let current = snapshot() else { return }
+        undoEdits.append(current); transcript = next.transcript; names = next.names
+        hasUnsavedChanges = true; lastEditGroup = ""; namesSaved = false
+        canUndoEdit = true; canRedoEdit = !redoEdits.isEmpty
+    }
+
+    private var focusedField: NSTextView? {
+        guard let view = NSApp?.keyWindow?.firstResponder as? NSTextView, view.isFieldEditor else { return nil }
+        return view
+    }
+
+    var canUndoCommand: Bool { focusedField.map { $0.undoManager?.canUndo ?? false } ?? canUndoEdit }
+    var canRedoCommand: Bool { focusedField.map { $0.undoManager?.canRedo ?? false } ?? canRedoEdit }
+    func undoCommand() { if let view = focusedField { view.undoManager?.undo() } else { undoEdit() } }
+    func redoCommand() { if let view = focusedField { view.undoManager?.redo() } else { redoEdit() } }
+
+    func segmentText(_ index: Int, id: String) -> String {
+        guard let document = transcript, document.segments.indices.contains(index), document.segments[index].id == id else { return "" }
+        return document.segments[index].text
+    }
+
+    func editText(_ index: Int, _ text: String, id: String? = nil) {
+        guard !running, var document = transcript, document.segments.indices.contains(index),
+              id == nil || document.segments[index].id == id,
+              document.segments[index].text != text else { return }
+        recordEdit("text-\(document.segments[index].id)")
+        document.segments[index].text = text; transcript = document
+    }
+
+    func editSpeaker(_ index: Int, _ speaker: Int, id: String? = nil) {
+        guard !running, var document = transcript, document.segments.indices.contains(index),
+              id == nil || document.segments[index].id == id,
+              speaker >= 0, speaker <= document.speakerCount else { return }
+        let value: Int? = speaker == 0 ? nil : speaker
+        guard document.segments[index].speaker != value else { return }
+        recordEdit()
+        document.segments[index].speaker = value
+        document.segments[index].uncertain = false
+        transcript = document
+    }
+
+    func renameSpeaker(_ speaker: Int, _ name: String) {
+        guard names[String(speaker)] != name else { return }
+        recordEdit("name-\(speaker)"); names[String(speaker)] = name
+    }
+
+    func addSpeaker() {
+        guard !running, var document = transcript, document.speakerCount < 8 else { return }
+        recordEdit(); document.speakerCount += 1; document.diarized = true; transcript = document
+    }
+
+    func markReviewed(_ index: Int) {
+        guard !running, var document = transcript, document.segments.indices.contains(index) else { return }
+        recordEdit()
+        document.segments[index].reviewed = !(document.segments[index].reviewed ?? false)
+        transcript = document
+    }
+
+    func restoreOriginal() {
+        guard !running, var original = originalDocument else { return }
+        recordEdit()
+        for index in original.segments.indices {
+            original.segments[index].segmentID = transcript?.segments.indices.contains(index) == true
+                ? transcript?.segments[index].segmentID : UUID().uuidString
+        }
+        transcript = original; names = original.names
+        editMessage = "Исходная версия восстановлена. Можно отменить или сохранить."
+    }
+
+    var visibleIndices: [Int] {
+        guard let document = transcript else { return [] }
+        return document.segments.indices.filter { index in
+            let row = document.segments[index]
+            let issue = (row.uncertain == true || row.overlap == true) && row.reviewed != true
+            return (!onlyIssues || issue) && (searchText.isEmpty || row.text.localizedCaseInsensitiveContains(searchText))
+        }
+    }
+
+    var replacementPreview: [ReplacementPreview] {
+        guard let document = transcript,
+              let pattern = TextReplacement.pattern(find: findTerm, caseSensitive: matchCase, wholeWord: matchWholeWord) else { return [] }
+        return document.segments.enumerated().compactMap { index, row in
+            let (text, count) = TextReplacement.apply(row.text, pattern: pattern, replacement: replaceTerm)
+            guard count > 0 else { return nil }
+            return ReplacementPreview(index: index, start: row.start, before: row.text, after: text, count: count)
+        }
+    }
+
+    func replaceAll() {
+        let preview = replacementPreview
+        guard !running, !preview.isEmpty, var document = transcript else { return }
+        recordEdit()
+        for row in preview { document.segments[row.index].text = row.after }
+        transcript = document
+        editMessage = "Замен: \(preview.reduce(0) { $0 + $1.count }) · реплик: \(preview.count)"
+        showReplacement = false
+    }
+
+    func rememberReplacement() {
+        guard !findTerm.isEmpty else { return }
+        let rule = TermRule(find: findTerm, replacement: replaceTerm,
+                            caseSensitive: matchCase, wholeWord: matchWholeWord)
+        if !termRules.contains(where: { $0.find == rule.find && $0.replacement == rule.replacement
+            && $0.caseSensitive == rule.caseSensitive && $0.wholeWord == rule.wholeWord }) { termRules.append(rule) }
+        saveDictionary()
+    }
+
+    var currentRuleStored: Bool {
+        termRules.contains { $0.find == findTerm && $0.replacement == replaceTerm
+            && $0.caseSensitive == matchCase && $0.wholeWord == matchWholeWord }
+    }
+
+    func removeRule(_ id: UUID) { termRules.removeAll { $0.id == id }; saveDictionary() }
+
+    func saveDictionary() {
+        if let data = try? JSONEncoder().encode(termRules) { UserDefaults.standard.set(data, forKey: "termRules") }
+        UserDefaults.standard.set(automaticDictionary, forKey: "automaticDictionary")
+    }
+
+    func applyTermDictionary() {
+        guard !running || receivedTerminal, var document = transcript, !termRules.isEmpty else { return }
+        var replacements = 0
+        for rule in termRules {
+            guard let pattern = TextReplacement.pattern(find: rule.find, caseSensitive: rule.caseSensitive, wholeWord: rule.wholeWord) else { continue }
+            for index in document.segments.indices {
+                let (text, count) = TextReplacement.apply(document.segments[index].text, pattern: pattern, replacement: rule.replacement)
+                document.segments[index].text = text; replacements += count
+            }
+        }
+        guard replacements > 0 else { editMessage = "Совпадений со словарём нет"; return }
+        recordEdit(); transcript = document
+        editMessage = "Словарь применён: \(replacements) замен. Можно отменить."
     }
 
     func copyText() {
@@ -366,6 +667,8 @@ struct ContentView: View {
         }
         .frame(minWidth: 920, minHeight: 700)
         .tint(accent)
+        .sheet(isPresented: $state.showReplacement) { ReplacementPanel(state: state) }
+        .sheet(isPresented: $state.showDictionary) { DictionaryPanel(state: state) }
         .alert("Не удалось выполнить действие", isPresented: Binding(get: { state.error != nil }, set: { if !$0 { state.error = nil } })) {
             Button("Понятно", role: .cancel) { state.error = nil }
         } message: { Text(state.error ?? "") }
@@ -494,7 +797,7 @@ struct ContentView: View {
                     HStack {
                         Text("Имена спикеров").font(.headline)
                         Spacer()
-                        Button(state.namesSaved ? "Имена сохранены" : "Сохранить имена") { state.saveNames() }
+                        if state.hasUnsavedChanges { Text("Есть правки").font(.caption).foregroundStyle(.secondary) }
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 200))], alignment: .leading, spacing: 8) {
                         ForEach(1...transcript.speakerCount, id: \.self) { speaker in
@@ -502,7 +805,7 @@ struct ContentView: View {
                                 Text("\(speaker)").font(.caption).fontWeight(.bold).foregroundStyle(speakerColor(speaker))
                                     .frame(width: 23, height: 23).background(speakerColor(speaker).opacity(0.1)).clipShape(Circle())
                                 TextField("Спикер \(speaker)", text: Binding(get: { state.names[String(speaker)] ?? "" },
-                                    set: { state.names[String(speaker)] = $0; state.namesSaved = false }))
+                                    set: { state.renameSpeaker(speaker, $0) }))
                                     .textFieldStyle(.roundedBorder)
                             }
                         }
@@ -512,40 +815,182 @@ struct ContentView: View {
                 }.padding(.horizontal, 28).padding(.vertical, 18)
                 Divider()
             }
+            editorToolbar
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 19) {
-                    ForEach(transcript.segments) { row in
-                        VStack(alignment: .leading, spacing: 7) {
-                            HStack(spacing: 9) {
-                                Button { state.play(at: row.start) } label: {
-                                    Label(timecode(row.start), systemImage: "play.circle")
-                                        .font(.system(size: 11, design: .monospaced))
-                                }.buttonStyle(.plain).foregroundStyle(.secondary).disabled(state.input == nil)
-                                if let speaker = row.speaker { Text(state.label(speaker)).font(.system(size: 12, weight: .semibold)).foregroundStyle(speakerColor(speaker)) }
-                                if row.overlap == true { Text("Одновременная речь").font(.caption2).foregroundStyle(.orange) }
-                                else if row.uncertain == true { Text("Голос неуверенно").font(.caption2).foregroundStyle(.secondary) }
-                            }
-                            Text(row.text.prefix(1).uppercased() + row.text.dropFirst()).font(.system(size: 14))
-                                .lineSpacing(4).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                        }
+                    ForEach(state.visibleIndices, id: \.self) { index in
+                        SegmentEditorRow(state: state, index: index)
                     }
+                    if state.visibleIndices.isEmpty { Text("Подходящих реплик нет").foregroundStyle(.secondary) }
                 }.padding(28)
             }
             Divider()
             HStack {
-                Text("TXT · MD · SRT сохранены").font(.caption).foregroundStyle(.secondary)
+                Text(state.hasUnsavedChanges ? "Есть несохранённые правки" : "TXT · MD · SRT сохранены")
+                    .font(.caption).foregroundStyle(state.hasUnsavedChanges ? Color.orange : Color.secondary)
                 Spacer()
                 if state.input == nil { Button("Указать исходную запись") { state.selectFile() } }
                 if state.playing { Button { state.stopPlayback() } label: { Image(systemName: "stop.fill") }.help("Остановить прослушивание") }
                 Button("Копировать текст") { state.copyText() }
+                Button("Сохранить правки") { state.saveEdits() }.disabled(!state.hasUnsavedChanges)
                 Button("Открыть папку") { state.showFolder() }.buttonStyle(.borderedProminent)
             }.padding(18)
         }
     }
 
+    private var editorToolbar: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Button(state.editing ? "Готово" : "Редактировать") { state.editing.toggle() }
+                Button { state.undoEdit() } label: { Image(systemName: "arrow.uturn.backward") }.help("Отменить правку").disabled(!state.canUndoEdit)
+                Button { state.redoEdit() } label: { Image(systemName: "arrow.uturn.forward") }.help("Повторить правку").disabled(!state.canRedoEdit)
+                Spacer()
+                Button("Найти и заменить") { state.showReplacement = true }
+                Button("Словарь") { state.showDictionary = true }
+            }
+            HStack {
+                TextField("Поиск по тексту", text: $state.searchText).textFieldStyle(.roundedBorder)
+                Toggle("Требуют проверки", isOn: $state.onlyIssues).toggleStyle(.checkbox)
+            }
+            if state.editing {
+                HStack {
+                    Text("Правьте текст и спикера. Временные метки сохраняются.").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Добавить спикера") { state.addSpeaker() }.font(.caption)
+                        .disabled((state.transcript?.speakerCount ?? 0) >= 8)
+                }
+            }
+            if !state.editMessage.isEmpty { Text(state.editMessage).font(.caption).foregroundStyle(.secondary) }
+        }.padding(.horizontal, 28).padding(.vertical, 14)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
     private func speakerColor(_ speaker: Int) -> Color {
         let colors: [Color] = [accent, .purple, .teal, .orange, .pink, .indigo, .brown, .green]
         return colors[(speaker - 1) % colors.count]
+    }
+}
+
+struct SegmentEditorRow: View {
+    @ObservedObject var state: AppModel
+    let index: Int
+    var body: some View {
+        if let document = state.transcript, document.segments.indices.contains(index) {
+            let row = document.segments[index]
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 9) {
+                    Button { state.play(at: row.start) } label: {
+                        Label(timecode(row.start), systemImage: "play.circle")
+                            .font(.system(size: 11, design: .monospaced))
+                    }.buttonStyle(.plain).foregroundStyle(.secondary).disabled(state.input == nil)
+                    if state.editing && document.speakerCount > 0 {
+                        Picker("Спикер", selection: Binding(get: { row.speaker ?? 0 }, set: { state.editSpeaker(index, $0, id: row.id) })) {
+                            Text("Без спикера").tag(0)
+                            ForEach(1...document.speakerCount, id: \.self) { n in Text(state.label(n)).tag(n) }
+                        }.labelsHidden().frame(maxWidth: 180)
+                    } else if let speaker = row.speaker {
+                        Text(state.label(speaker)).font(.system(size: 12, weight: .semibold)).foregroundStyle(.blue)
+                    }
+                    if row.overlap == true { Text("Одновременная речь").font(.caption2).foregroundStyle(.orange) }
+                    else if row.uncertain == true { Text("Голос неуверенно").font(.caption2).foregroundStyle(.secondary) }
+                    Spacer()
+                    Button { state.markReviewed(index) } label: {
+                        Image(systemName: row.reviewed == true ? "checkmark.seal.fill" : "checkmark.seal")
+                            .foregroundStyle(row.reviewed == true ? Color.green : Color.secondary)
+                    }.buttonStyle(.plain).help(row.reviewed == true ? "Снять отметку проверки" : "Отметить проверенной")
+                }
+                if state.editing {
+                    TextEditor(text: Binding(get: { state.segmentText(index, id: row.id) },
+                        set: { state.editText(index, $0, id: row.id) }))
+                        .font(.system(size: 14)).lineSpacing(4)
+                        .frame(height: min(180, max(70, CGFloat(row.text.count / 65 + 2) * 22)))
+                        .padding(6).background(Color(nsColor: .textBackgroundColor))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.gray.opacity(0.2)))
+                } else {
+                    Text(row.text).font(.system(size: 14)).lineSpacing(4).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+}
+
+struct ReplacementPanel: View {
+    @ObservedObject var state: AppModel
+    var body: some View {
+        let preview = state.replacementPreview
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Найти и заменить").font(.title2).fontWeight(.semibold)
+            TextField("Найти термин или фразу", text: $state.findTerm).textFieldStyle(.roundedBorder)
+            TextField("Заменить на", text: $state.replaceTerm).textFieldStyle(.roundedBorder)
+            HStack {
+                Toggle("Учитывать регистр", isOn: $state.matchCase)
+                Toggle("Только целое слово", isOn: $state.matchWholeWord)
+            }.toggleStyle(.checkbox)
+            Text("Совпадений: \(preview.reduce(0) { $0 + $1.count }) · реплик: \(preview.count)")
+                .font(.subheadline).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 15) {
+                    ForEach(Array(preview.prefix(8))) { row in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(timecode(row.start)).font(.caption).foregroundStyle(.secondary)
+                            Text(row.before).foregroundStyle(.secondary)
+                            Text(row.after).foregroundStyle(.primary)
+                        }.font(.system(size: 13)).textSelection(.enabled)
+                    }
+                    if preview.count > 8 { Text("И ещё \(preview.count - 8) реплик").font(.caption).foregroundStyle(.secondary) }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(minHeight: 130, maxHeight: 300)
+            HStack {
+                Button(state.currentRuleStored ? "Добавлено в словарь" : "Добавить в словарь") { state.rememberReplacement() }
+                    .disabled(state.findTerm.isEmpty || state.currentRuleStored)
+                Spacer()
+                Button("Закрыть") { state.showReplacement = false }.keyboardShortcut(.cancelAction)
+                Button("Заменить все") { state.replaceAll() }.buttonStyle(.borderedProminent)
+                    .disabled(preview.isEmpty).keyboardShortcut(.defaultAction)
+            }
+            Text("После замены можно отменить правку. В файлы изменения попадут при сохранении.")
+                .font(.caption).foregroundStyle(.secondary)
+        }.padding(24).frame(width: 620)
+    }
+}
+
+struct DictionaryPanel: View {
+    @ObservedObject var state: AppModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Словарь исправлений").font(.title2).fontWeight(.semibold)
+            Text("Добавляйте пары через «Найти и заменить». Словарь хранится только на этом Mac.")
+                .font(.subheadline).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(state.termRules) { rule in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(rule.find) → \(rule.replacement)")
+                                Text((rule.caseSensitive ? "С учётом регистра" : "Любой регистр") + (rule.wholeWord ? " · целое слово" : " · часть слова"))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button { state.removeRule(rule.id) } label: { Image(systemName: "trash") }.help("Удалить правило")
+                        }
+                    }
+                    if state.termRules.isEmpty { Text("В словаре пока нет правил").foregroundStyle(.secondary) }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(minHeight: 120, maxHeight: 320)
+            Toggle("Применять автоматически после распознавания", isOn: Binding(get: { state.automaticDictionary },
+                set: { state.automaticDictionary = $0; state.saveDictionary() })).toggleStyle(.checkbox)
+            Text("Правила применяются по порядку. Исходный результат сохраняется отдельно.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Вернуть исходную версию") { state.restoreOriginal(); state.showDictionary = false }
+                    .disabled(state.transcript == nil)
+                Spacer()
+                Button("Закрыть") { state.showDictionary = false }.keyboardShortcut(.cancelAction)
+                Button("Применить к транскрипции") { state.applyTermDictionary(); state.showDictionary = false }
+                    .disabled(state.termRules.isEmpty || state.transcript == nil).buttonStyle(.borderedProminent)
+            }
+        }.padding(24).frame(width: 620)
     }
 }
 
@@ -556,7 +1001,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let state = state, state.running else { return .terminateNow }
+        guard let state = state else { return .terminateNow }
+        if !state.running { return state.confirmPendingEdits() ? .terminateNow : .terminateCancel }
         let alert = NSAlert()
         alert.messageText = "Запись ещё обрабатывается"
         alert.informativeText = "Остановить обработку и закрыть приложение?"
@@ -584,6 +1030,17 @@ struct LocalTranscriberApp: App {
                 CommandGroup(replacing: .newItem) {
                     Button("Выбрать запись…") { state.selectFile() }.keyboardShortcut("o").disabled(state.running)
                     Button("Открыть транскрипцию…") { state.openResult() }.keyboardShortcut("o", modifiers: [.command, .shift]).disabled(state.running)
+                }
+                CommandGroup(replacing: .undoRedo) {
+                    Button("Отменить правку") { state.undoCommand() }.keyboardShortcut("z").disabled(!state.canUndoCommand || state.running)
+                    Button("Повторить правку") { state.redoCommand() }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(!state.canRedoCommand || state.running)
+                }
+                CommandGroup(replacing: .saveItem) {
+                    Button("Сохранить правки") { state.saveEdits() }.keyboardShortcut("s").disabled(!state.hasUnsavedChanges || state.running)
+                }
+                CommandMenu("Транскрипция") {
+                    Button("Найти и заменить…") { state.showReplacement = true }.keyboardShortcut("f").disabled(state.transcript == nil || state.running)
+                    Button("Словарь исправлений…") { state.showDictionary = true }.disabled(state.running)
                 }
             }
     }

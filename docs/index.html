@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f8fc">
+  <title>Голоса — разговор в текст, на вашем Mac</title>
+  <meta name="description" content="Локальная транскрипция аудио и видео для macOS. GigaAM и Parakeet, разделение по спикерам, редактор и плеер. Попробуйте интерактивное демо и скачайте Голоса.">
+  <meta property="og:title" content="Голоса — каждому голосу своя реплика">
+  <meta property="og:description" content="Разговор в текст. Имена, время и редактор — на вашем Mac, без отправки аудио в облако.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://dmitryturin-art.github.io/local-transcriber/">
+  <meta property="og:image" content="https://dmitryturin-art.github.io/local-transcriber/site-assets/social-preview.png">
+  <link rel="canonical" href="https://dmitryturin-art.github.io/local-transcriber/">
+  <link rel="icon" href="site-assets/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+<svg class="svg-defs" aria-hidden="true"><defs>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M5 17v4h14v-4"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="m14 5 5 5M4 20l4-1 12-12a3 3 0 0 0-4-4L4 15Zm8-1h8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="3"/><path d="M16 8V4H4v12h4"/></symbol>
+</defs></svg>
+<a class="skip-link" href="#main">Перейти к содержимому</a>
+<header class="site-header"><nav class="nav wrap" aria-label="Главное меню">
+  <a class="brand" href="#"><img src="site-assets/icon.svg" alt="" width="36" height="36"><span>Голоса</span><span class="version">1.4</span></a>
+  <div class="nav-links"><a href="#features">Возможности</a><a href="#try">Попробовать</a><a href="#questions">Вопросы</a></div>
+  <a class="nav-download" href="https://github.com/dmitryturin-art/local-transcriber/releases/download/v1.4.0/Golosa-1.4.0-AppleSilicon.dmg">Скачать <svg class="icon"><use href="#i-download"/></svg></a>
+</nav></header>
+<main id="main">
+<section class="hero wrap">
+  <div class="hero-copy">
+    <div class="eyebrow"><span class="status-dot"></span> ВАШИ РАЗГОВОРЫ. ВАШ КОМПЬЮТЕР.</div>
+    <h1>Разговор —<br>в текст.<br><span class="gradient-text">Голоса —<br class="desktop-break"> по местам.</span></h1>
+    <p class="hero-lead">Расшифруйте встречу, интервью или лекцию.<br class="wide-only"> С именами участников, временем и пунктуацией.<br class="wide-only"> Аудио остаётся на вашем Mac.</p>
+    <div class="hero-actions"><a class="button primary" href="https://github.com/dmitryturin-art/local-transcriber/releases/download/v1.4.0/Golosa-1.4.0-AppleSilicon.dmg"><svg class="icon"><use href="#i-download"/></svg> Скачать для macOS <svg class="icon"><use href="#i-arrow"/></svg></a><a class="text-link" href="#try">Попробовать демо <span>↘</span></a></div>
+    <p class="compatibility">Бесплатно · Apple Silicon · macOS 14+</p>
+  </div>
+  <div class="signal-scene" id="signal-scene" aria-label="Анимированная визуализация голоса">
+    <div class="scene-orbit orbit-one"></div><div class="scene-orbit orbit-two"></div>
+    <div class="scene-core">
+      <div class="signal-top"><span><i></i> ГОЛОС → ТЕКСТ</span><span class="signal-count">02 голоса</span></div>
+      <div class="wave-wrap"><canvas id="wave" aria-hidden="true"></canvas><div class="wave-centerline"></div></div>
+      <div class="scene-line"><span class="scene-avatar alex">А</span><div><div class="scene-name">Алексей <span>00:12</span></div><p>Давайте обсудим план.</p></div></div>
+      <div class="scene-line second"><span class="scene-avatar marina">М</span><div><div class="scene-name">Марина <span>00:20</span></div><p>Я начну со списка задач.</p></div></div>
+      <div class="signal-bottom"><span>Два голоса. Один понятный диалог.</span><span class="mini-wave">▂ ▅ ▇ ▄ ▆ ▂</span></div>
+    </div>
+    <div class="float-badge privacy-badge"><svg class="icon"><use href="#i-lock"/></svg><span>Остаётся на Mac</span></div>
+    <div class="float-badge ready-badge"><span class="check-bubble"><svg class="icon"><use href="#i-check"/></svg></span><div><strong>Текст готов к работе</strong><span>TXT · Markdown · SRT</span></div></div>
+    <span class="scene-caption">Звук становится структурой.</span>
+  </div>
+</section>
+<section class="trust-strip wrap" aria-label="Основные возможности"><div><svg class="icon"><use href="#i-lock"/></svg><span>Распознавание без облака</span></div><div><svg class="icon"><use href="#i-clock"/></svg><span>В том числе записи длиннее часа</span></div><div><svg class="icon"><use href="#i-edit"/></svg><span>Текст, который можно поправить</span></div></section>
+<section class="demo-section wrap reveal" id="try">
+  <div class="section-heading"><div><span class="eyebrow">ПОПРОБУЙТЕ ПРЯМО ЗДЕСЬ</span><h2>Потяните время.<br>Диалог последует за вами.</h2></div><p>Переместите ползунок, переключите вид текста<br class="wide-only"> или задайте имена. Это вымышленный диалог —<br class="wide-only"> демонстрация просмотра, без звука.</p></div>
+  <div class="demo-shell">
+    <div class="demo-titlebar"><div class="traffic-lights"><i></i><i></i><i></i></div><span>Обсуждение проекта</span><span class="demo-label">ИНТЕРАКТИВНОЕ ДЕМО</span></div>
+    <div class="demo-body">
+      <aside class="demo-sidebar"><div class="demo-file"><div class="file-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><strong>Обсуждение проекта.m4a</strong><span>01:12 · 2 участника</span></div><div class="demo-names"><label for="name-1"><span class="name-dot alex">1</span> Имя первого спикера</label><input id="name-1" value="Алексей" maxlength="32"><label for="name-2"><span class="name-dot marina">2</span> Имя второго спикера</label><input id="name-2" value="Марина" maxlength="32"></div><button class="reset-demo" id="reset-demo">Вернуть исходное демо ↺</button><p class="demo-hint">Здесь можно потрогать интерфейс.<br>Ваши файлы на сайт не загружаются.</p></aside>
+      <div class="demo-main"><div class="demo-toolbar"><div class="segmented" role="group" aria-label="Вид текста"><button id="mode-speakers" class="active" aria-pressed="true">По спикерам</button><button id="mode-plain" aria-pressed="false">Сплошной текст</button></div><span class="demo-state"><span class="status-dot"></span> Демо без звука</span></div><div class="transcript" id="transcript" aria-label="Реплики демодиалога"><noscript>Для интерактивного демо включите JavaScript. Скачать приложение можно кнопкой выше.</noscript></div><div class="demo-player"><button class="play-button" id="demo-play" aria-label="Запустить демо"><svg class="icon"><use href="#i-play"/></svg></button><time id="current-time">00:00</time><input id="timeline" aria-label="Время в демодиалоге" type="range" min="0" max="72" step="0.1" value="0"><time>01:12</time></div><div class="demo-export"><span id="demo-feedback" aria-live="polite">Проверьте, как выглядит готовый текст</span><div><button id="copy-demo"><svg class="icon"><use href="#i-copy"/></svg> Копировать</button><select id="export-format" aria-label="Формат экспорта демо"><option value="txt">TXT</option><option value="md">Markdown</option><option value="srt">SRT</option></select><button id="export-demo" class="export-button">Экспорт <svg class="icon"><use href="#i-download"/></svg></button></div></div></div>
+    </div>
+  </div>
+  <button class="screenshot-link" id="show-screenshot">Посмотреть настоящий интерфейс приложения <span>↗</span></button>
+</section>
+<section class="features-section wrap reveal" id="features">
+  <div class="section-heading"><div><span class="eyebrow">ПОСЛЕ РАСПОЗНАВАНИЯ ЖИЗНЬ ПРОДОЛЖАЕТСЯ</span><h2>Не просто расшифровка.<br>Рабочее место для разговора.</h2></div></div>
+  <div class="feature-grid"><article class="feature-card"><div class="feature-visual speaker-visual"><span class="speaker-pill alex">Алексей</span><span class="speaker-pill marina">Марина</span><div class="little-lines"><i></i><i></i><i></i></div></div><h3>Кто что сказал</h3><p>Разделяйте реплики по участникам. Назначайте имена, объединяйте спикеров и исправляйте ошибочные назначения.</p></article><article class="feature-card"><div class="feature-visual edit-visual"><span>Вернёмся к <mark>главному</mark></span><span class="edit-caret"></span><div class="edit-bubble">Найти и заменить <span>↵</span></div></div><h3>Текст под вашим контролем</h3><p>Исправляйте реплики, заменяйте повторяющиеся термины и проверяйте сомнительные места по исходному аудио.</p></article><article class="feature-card"><div class="feature-visual export-visual"><div class="format-sheet fmt-txt">TXT</div><div class="format-sheet fmt-md">MD</div><div class="format-sheet fmt-srt">SRT</div></div><h3>Удобно забрать с собой</h3><p>Скопируйте текст или экспортируйте нужный формат. Со спикерами или без них — время и абзацы сохранятся.</p></article></div>
+</section>
+<section class="models-section wrap reveal"><div class="models-copy"><span class="eyebrow">ДВА ДВИЖКА. ОДНО ПРИЛОЖЕНИЕ.</span><h2>Выберите свой голос.</h2><p>Скачайте одну модель при первом запуске.<br>Вторую можно добавить, когда понадобится.<br>После загрузки интернет для распознавания не нужен.</p></div><div class="model-card"><div class="model-tabs" role="group" aria-label="Информация о моделях"><button class="active" data-model="gigaam" aria-pressed="true">GigaAM v3</button><button data-model="parakeet" aria-pressed="false">Parakeet v3</button></div><div id="model-info"><span class="model-tag">РУССКИЙ ЯЗЫК</span><h3>Для русскоязычных разговоров.</h3><p>Модель с пунктуацией для встреч, интервью и повседневной речи на русском.</p></div><div class="model-footer"><svg class="icon"><use href="#i-check"/></svg> Модели можно импортировать, удалить и скачать снова</div></div></section>
+<section class="steps-section wrap reveal"><div class="section-heading"><div><span class="eyebrow">НАЧАТЬ ПРОЩЕ, ЧЕМ РАЗБИРАТЬ ЗАПИСЬ ВРУЧНУЮ</span><h2>Три шага до текста.</h2></div></div><div class="steps"><article><span class="step-number">01</span><h3>Установите «Голоса»</h3><p>Откройте DMG и перенесите приложение в «Программы». Выберите модель.</p></article><article><span class="step-number">02</span><h3>Перетащите запись</h3><p>Аудио или видео. Укажите число участников, если оно известно, и запустите расшифровку.</p></article><article><span class="step-number">03</span><h3>Проверьте и сохраните</h3><p>Задайте имена, поправьте реплики и выберите удобный формат экспорта.</p></article></div></section>
+<section class="faq-section wrap reveal" id="questions"><div><span class="eyebrow">ПЕРЕД ПЕРВЫМ ЗАПУСКОМ</span><h2>Хорошие вопросы.</h2><a class="text-link" href="https://github.com/dmitryturin-art/local-transcriber/blob/main/docs/USER_GUIDE.md" target="_blank" rel="noopener">Полная инструкция <span>↗</span></a></div><div class="faq-list"><details><summary>Это действительно работает без интернета?</summary><p>Да, после загрузки моделей. Интернет нужен при первом скачивании GigaAM или Parakeet и общих компонентов. Записи и транскрипции обрабатываются на вашем компьютере.</p></details><details><summary>На каком Mac можно запустить?</summary><p>На Mac с Apple Silicon — M1 и новее, с macOS 14 или новее. Готовая сборка проверена на M4; отдельной проверки на других Mac не проводилось. Intel и Windows пока не поддерживаются.</p></details><details><summary>Модели уже внутри установщика?</summary><p>Веса моделей скачиваются отдельно. При первом запуске выберите одну из двух моделей. Можно импортировать уже скачанные файлы; обновление приложения не требует скачивать их повторно.</p></details><details><summary>Какие записи можно расшифровать?</summary><p>M4A, MP3, WAV, OGG/OPUS, FLAC и другие распространённые аудио- и видеоформаты. Приложение обрабатывает длинные записи частями; исходный файл не изменяется.</p></details><details><summary>Спикеры всегда определяются правильно?</summary><p>Автоматическое разделение может ошибаться, особенно на коротких репликах, похожих голосах и одновременной речи. Пометка «Проверьте спикера» предлагает сверить участника с аудио. Текст и спикеров можно поправить вручную.</p></details><details><summary>Почему macOS предупреждает при открытии?</summary><p>Эта сборка пока без нотарификации Apple. После первой попытки запуска macOS может попросить разрешить открытие в «Системные настройки → Конфиденциальность и безопасность → Всё равно открыть».</p></details></div></section>
+<section class="download-section"><div class="download-orbit"></div><div class="wrap download-content"><img src="site-assets/icon.svg" alt="" width="70" height="70"><span class="eyebrow">МЕНЬШЕ ПЕРЕМАТЫВАТЬ. БОЛЬШЕ ПОНЯТЬ.</span><h2>Разговор остаётся вашим.<br>Теперь и в тексте.</h2><a class="button light" href="https://github.com/dmitryturin-art/local-transcriber/releases/download/v1.4.0/Golosa-1.4.0-AppleSilicon.dmg"><svg class="icon"><use href="#i-download"/></svg> Скачать «Голоса» <svg class="icon"><use href="#i-arrow"/></svg></a><p>Версия 1.4.0 · macOS 14+ · Apple Silicon</p><a href="https://github.com/dmitryturin-art/local-transcriber/releases/tag/v1.4.0">Описание выпуска и контрольная сумма ↗</a></div></section>
+</main>
+<footer class="wrap site-footer"><a class="brand" href="#"><img src="site-assets/icon.svg" alt="" width="28" height="28"> Голоса</a><span>Сделано для разговоров, которые хочется сохранить.</span><div><a href="https://github.com/dmitryturin-art/local-transcriber" target="_blank" rel="noopener">GitHub ↗</a><a href="https://github.com/dmitryturin-art/local-transcriber/blob/main/CHANGELOG.md" target="_blank" rel="noopener">Изменения</a><a href="https://github.com/dmitryturin-art/local-transcriber/blob/main/THIRD_PARTY.md" target="_blank" rel="noopener">Лицензии</a></div></footer>
+<dialog id="screenshot-dialog"><div class="dialog-heading"><span>«Голоса» на Mac · вымышленный диалог</span><button id="close-screenshot" aria-label="Закрыть изображение">✕</button></div><img src="site-assets/app-overview.png" alt="Интерфейс Голоса: имена спикеров, редактор, плеер и экспорт" loading="lazy"></dialog>
+</body></html>

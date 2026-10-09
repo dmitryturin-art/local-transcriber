@@ -20,6 +20,8 @@
   &nbsp; · &nbsp;
   <a href="https://github.com/dmitryturin-art/local-transcriber/releases/tag/v1.4.0">Что нового</a>
   &nbsp; · &nbsp;
+  <a href="https://dmitryturin-art.github.io/local-transcriber/">Сайт приложения</a>
+  &nbsp; · &nbsp;
   <a href="docs/USER_GUIDE.md">Инструкция</a>
 </p>
 
